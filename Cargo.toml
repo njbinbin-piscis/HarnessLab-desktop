@@ -5,7 +5,7 @@ edition = "2021"
 description = "Agent Workbench - Configuration-driven agent experimentation platform"
 
 [dependencies]
-pisci-kernel = { path = "../pisci-engine/pisci-kernel" }
+pisci-kernel = { path = "../piscis-engine/pisci-kernel" }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1"

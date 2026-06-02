@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document summarizes the implementation of **Phase 1** from the pisci-engine architecture refactor plan: defining plugin interfaces for `ContextManager` and `MemoryPlugin`, and integrating them into the `HarnessConfig` builder system.
+This document summarizes the implementation of **Phase 1** from the piscis-engine architecture refactor plan: defining plugin interfaces for `ContextManager` and `MemoryPlugin`, and integrating them into the `HarnessConfig` builder system.
 
 ## Changes Made
 

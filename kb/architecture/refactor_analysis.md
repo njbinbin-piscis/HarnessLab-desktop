@@ -1,4 +1,4 @@
-# pisci-engine 架构重构分析报告
+# piscis-engine 架构重构分析报告
 
 ## 1. 核心 Loop 纯度分析
 
@@ -14,7 +14,7 @@ Loop 的核心驱动是纯净的，但被大量的“辅助性”逻辑包裹。
 ## 2. 扩展点现状 (Plugins & Hooks)
 
 ### 插件化 (Plugins)
-目前 `pisci-engine` 已经具备了初步的插件化接口，主要定义在 `pisci-core/src/host.rs` 和 `pisci-kernel` 的各模块中：
+目前 `piscis-engine` 已经具备了初步的插件化接口，主要定义在 `pisci-core/src/host.rs` 和 `pisci-kernel` 的各模块中：
 
 | 组件 | 接口位置 | 现状 |
 | :--- | :--- | :--- |
@@ -85,7 +85,7 @@ Loop 的核心驱动是纯净的，但被大量的“辅助性”逻辑包裹。
 
 ## 5. 总结
 
-`pisci-engine` 已经具备了成为通用 Agent 内核的雏形，特别是在 Tool 系统和 Host 抽象方面做得很好。当前的主要瓶颈在于 `loop_.rs` 过于臃肿，且 Context/Memory 的管理逻辑分散且硬编码。
+`piscis-engine` 已经具备了成为通用 Agent 内核的雏形，特别是在 Tool 系统和 Host 抽象方面做得很好。当前的主要瓶颈在于 `loop_.rs` 过于臃肿，且 Context/Memory 的管理逻辑分散且硬编码。
 
 **下一步建议：**
 由 Coder 开始实施“第一阶段”，首先提取 `ContextManager` 和 `MemoryPlugin` 接口，并在 `HarnessConfig` 中增加对它们的引用。同时，Architect 将提供详细的 YAML 配置 Schema 草案。

@@ -9,7 +9,7 @@ The **Meta-Agent** is a specialized, pre-configured Agent within the Workbench d
   - `agent_config.yaml`: Complete configuration file including model settings, plugins, and policies.
   - `system_prompt.md`: Optimized system prompt tailored to the agent's role.
   - `workflow.json` (Optional): A structured plan or tool-chain definition for complex agents.
-- **Core Capability**: Leverages the existing `pisci-engine` kernel with a specialized "Architect" persona and access to a library of agent design patterns.
+- **Core Capability**: Leverages the existing `piscis-engine` kernel with a specialized "Architect" persona and access to a library of agent design patterns.
 
 ## 3. Backend API Interface Specification
 

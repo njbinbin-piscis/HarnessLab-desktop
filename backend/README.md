@@ -66,9 +66,9 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 pytest backend/tests/ -v
 ```
 
-## Integration with pisci-engine
+## Integration with piscis-engine
 
-The backend is designed to integrate with the Rust-based `pisci-engine` core. In production:
+The backend is designed to integrate with the Rust-based `piscis-engine` core. In production:
 1. The `ExperimentManager` spawns the engine as a subprocess or via PyO3 bindings
 2. Engine output is parsed into `AgentEvent` objects
 3. Events are pushed to the SSE stream for real-time frontend visualization

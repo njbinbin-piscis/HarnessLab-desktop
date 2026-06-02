@@ -2,7 +2,7 @@
 
 ## 1. 极简 Loop 提取 (Minimalist Loop Extraction)
 
-从 `pisci-engine` 中提取出的极简 Agent Loop 逻辑由以下三个核心组件构成：
+从 `piscis-engine` 中提取出的极简 Agent Loop 逻辑由以下三个核心组件构成：
 
 ### 1.1 State (状态)
 - **Session State**: 包含当前会话 ID、模型配置、Token 预算 (`LayeredBudget`)。
@@ -104,7 +104,7 @@ hooks:
 
 ## 5. 总结与下一步
 
-本架构设计完成了对 `pisci-engine` 的内核提取，明确了插件接口和钩子机制。下一步建议 Coder 执行：
+本架构设计完成了对 `piscis-engine` 的内核提取，明确了插件接口和钩子机制。下一步建议 Coder 执行：
 1. **配置解析器开发**: 实现 YAML 到 `HarnessConfig` 的映射。
 2. **更多插件实现**: 补充 `SqliteMemory` 和 `WorkspaceRootManager`。
 3. **基准测试**: 验证不同配置下的 Agent 行为一致性。

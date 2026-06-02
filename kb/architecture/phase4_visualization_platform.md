@@ -135,7 +135,7 @@ class AgentEvent(BaseModel):
 - [ ] Initialize FastAPI project structure.
 - [ ] Implement `/api/v1/config/validate` endpoint.
 - [ ] Create `ExperimentManager` to handle lifecycle.
-- [ ] Integrate with `pisci-engine` (subprocess or PyO3 binding).
+- [ ] Integrate with `piscis-engine` (subprocess or PyO3 binding).
 
 ### Phase 4.2: Streaming & State Management (Week 2)
 - [ ] Implement SSE streaming for agent events.

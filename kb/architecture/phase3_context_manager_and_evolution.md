@@ -78,7 +78,7 @@ policy:
 
 1. **Define Traits**: Add `ContextManager` and `EvolutionHook` traits to `src/plugins.rs`.
 2. **Implement Managers**: 
-   - `ProjectContextManager`: Reuse existing logic from `pisci-engine`.
+   - `ProjectContextManager`: Reuse existing logic from `piscis-engine`.
    - `WorkspaceRootManager`: Simple file reader.
    - `DynamicContextManager`: Stub implementation using `InMemoryVectorStore`.
 3. **Implement Evolution Hook**: 
