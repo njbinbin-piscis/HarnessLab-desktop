@@ -1,0 +1,46 @@
+# Plan-and-Solve Strategy Configuration
+#
+# This configuration implements the Plan-and-Solve pattern, where the agent
+# first creates a structured plan before executing any tools.
+#
+# Key characteristics:
+# - Explicit planning phase with todo list management
+# - Systematic execution of planned steps
+# - Better for complex, multi-step tasks requiring coordination
+# - Uses pool_org tools for task tracking
+
+agent:
+  name: "Plan-and-Solve-Strategist"
+  model: "claude-sonnet-4.5"
+  context_window: 200000
+  max_tokens: 8192
+  fallback_models:
+    - "gpt-4o"
+  enable_streaming: true
+  vision_override: null
+
+plugins:
+  memory: "InMemoryVectorStore"
+  context: "ProjectContextManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: true
+  auto_compact_threshold: 120000
+  compaction_tiers:
+    micro_percent: 55
+    auto_percent: 75
+    full_percent: 92
+  max_tool_result_tokens: 6000
+  summary_model: "claude-haiku-4.5"
+
+strategy:
+  type: "plan_and_solve"
+  system_prompt_template: "You are a Plan-and-Solve agent. First, create a detailed plan with steps. Then, execute each step systematically. Format your response as:\nPlan: <your detailed plan>\nStep 1: <action>"
+
+hooks:
+  - type: "FileJournal"
+    path: ".pisci/journal.db"
+    enabled: true
+  - type: "PlanTracker"
+    enabled: true

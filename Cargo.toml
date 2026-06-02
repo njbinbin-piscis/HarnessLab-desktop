@@ -1,0 +1,36 @@
+[package]
+name = "agent-workbench"
+version = "0.1.0"
+edition = "2021"
+description = "Agent Workbench - Configuration-driven agent experimentation platform"
+
+[dependencies]
+pisci-kernel = { path = "../pisci-engine/pisci-kernel" }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+glob = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "config_loader"
+path = "tests/benchmark/config_loader.rs"
+
+[[test]]
+name = "benchmark_runner"
+path = "tests/benchmark/runner.rs"
+
+[[test]]
+name = "config_validation"
+path = "tests/benchmark/config_validation.rs"
+
+[[test]]
+name = "phase3_validation"
+path = "tests/benchmark/phase3_validation.rs"

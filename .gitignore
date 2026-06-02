@@ -1,1 +1,28 @@
+# ── Rust ────────────────────────────────────────────────
+/target/
+**/target/
+
+# ── Python ──────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / frontend ─────────────────────────────────────
+node_modules/
+frontend/dist/
+dist/
+*.tsbuildinfo
+
+# ── Koi orchestration & local runtime artifacts ─────────
 .koi-worktrees/
+.pisci/
+.codez/
+
+# ── Editor / OS ─────────────────────────────────────────
+.DS_Store
+*.swp

@@ -1,0 +1,188 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent Workbench Configuration",
+  "description": "Schema for Agent Workbench YAML configuration files.",
+  "type": "object",
+  "properties": {
+    "agent": {
+      "type": "object",
+      "description": "Agent identity and model settings.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Human-readable agent name."
+        },
+        "model": {
+          "type": "string",
+          "description": "Primary model identifier (e.g., 'claude-sonnet-4.5')."
+        },
+        "context_window": {
+          "type": "integer",
+          "default": 0,
+          "description": "Model context window in tokens (0 = auto-detect)."
+        },
+        "max_tokens": {
+          "type": "integer",
+          "default": 4096,
+          "description": "Maximum output tokens per turn."
+        },
+        "fallback_models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Fallback models to try on rate-limit or failure."
+        },
+        "enable_streaming": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable SSE streaming for incremental response rendering."
+        },
+        "vision_override": {
+          "type": ["boolean", "null"],
+          "description": "Vision capability override (null = auto from model id)."
+        },
+        "vision_model": {
+          "type": ["string", "null"],
+          "description": "Optional separate vision model for image analysis delegation."
+        }
+      },
+      "required": ["name", "model"]
+    },
+    "plugins": {
+      "type": "object",
+      "description": "Plugin selection configuration.",
+      "properties": {
+        "memory": {
+          "type": "string",
+          "default": "InMemoryVectorStore",
+          "enum": ["NoOpMemory", "InMemoryVectorStore", "SqliteMemory"],
+          "description": "Memory plugin identifier."
+        },
+        "context": {
+          "type": "string",
+          "default": "ProjectContextManager",
+          "enum": ["ProjectContextManager", "WorkspaceRootManager"],
+          "description": "Context manager plugin identifier."
+        }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "description": "Policy and confirmation preferences.",
+      "properties": {
+        "confirm_shell": {
+          "type": "boolean",
+          "default": false,
+          "description": "Require user confirmation before executing shell commands."
+        },
+        "confirm_file_write": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require user confirmation before writing files."
+        },
+        "auto_compact_threshold": {
+          "type": "integer",
+          "default": 0,
+          "description": "Auto-compaction threshold in cumulative input tokens."
+        },
+        "compaction_tiers": {
+          "type": "object",
+          "properties": {
+            "micro_percent": {
+              "type": "integer",
+              "default": 50
+            },
+            "auto_percent": {
+              "type": "integer",
+              "default": 70
+            },
+            "full_percent": {
+              "type": "integer",
+              "default": 90
+            }
+          }
+        },
+        "max_tool_result_tokens": {
+          "type": "integer",
+          "default": 4000,
+          "description": "Maximum tokens allowed per tool result."
+        },
+        "summary_model": {
+          "type": ["string", "null"],
+          "description": "Optional model for generating rolling summaries."
+        },
+        "evolution": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "metrics": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": ["tool_call_efficiency", "user_correction_rate"]
+            },
+            "threshold": {
+              "type": "object",
+              "properties": {
+                "user_correction_rate": {
+                  "type": "number",
+                  "default": 0.2
+                }
+              }
+            },
+            "action": {
+              "type": "string",
+              "default": "propose_config_update"
+            }
+          }
+        }
+      }
+    },
+    "strategy": {
+      "type": "object",
+      "description": "Strategy configuration for ReAct vs Plan-and-Solve patterns.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "default": "react",
+          "enum": ["react", "plan_and_solve"],
+          "description": "Strategy type."
+        },
+        "system_prompt_template": {
+          "type": "string",
+          "default": "You are a helpful assistant.",
+          "description": "System prompt template path or inline content."
+        }
+      }
+    },
+    "hooks": {
+      "type": "array",
+      "description": "Hook configuration entries.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Hook type identifier (e.g., 'FileJournal', 'AuditLog')."
+          },
+          "path": {
+            "type": "string",
+            "description": "Optional hook-specific storage path."
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether the hook is enabled."
+          }
+        },
+        "required": ["type"]
+      }
+    }
+  },
+  "required": ["agent"]
+}

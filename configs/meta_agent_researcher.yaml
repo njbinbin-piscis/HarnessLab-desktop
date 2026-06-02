@@ -1,0 +1,59 @@
+# Meta-Agent Researcher Configuration
+# 
+# This configuration is designed for the Meta-Agent, which helps researchers
+# design and evaluate new Agent strategies. It uses a high-quality model
+# for reasoning and includes a summary model for efficient context management.
+
+agent:
+  name: "Meta-Agent-Researcher"
+  model: "claude-sonnet-4.5"
+  context_window: 200000
+  max_tokens: 8192
+  fallback_models:
+    - "gpt-4o"
+  enable_streaming: true
+  vision_override: null
+  vision_model: "qwen-vl-max"
+
+plugins:
+  memory: "InMemoryVectorStore"
+  context: "ProjectContextManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: true
+  auto_compact_threshold: 150000
+  compaction_tiers:
+    micro_percent: 60
+    auto_percent: 80
+    full_percent: 95
+  max_tool_result_tokens: 8000
+  summary_model: "claude-haiku-4.5"
+  evolution:
+    enabled: true
+    metrics:
+      - "tool_call_efficiency"
+      - "user_correction_rate"
+      - "plan_adherence"
+    threshold:
+      user_correction_rate: 0.15
+    action: "propose_config_update"
+
+strategy:
+  type: "plan_and_solve"
+  system_prompt_template: |
+    You are a Meta-Agent Researcher. Your goal is to help users design, evaluate, and refine AI Agent configurations.
+    
+    1. **Analyze Requirements**: Understand the user's research goals and constraints.
+    2. **Propose Configuration**: Suggest YAML configurations based on the `experiment_configuration_specification.md`.
+    3. **Evaluate Trade-offs**: Discuss the pros and cons of different plugin combinations (e.g., Memory vs. NoOpMemory).
+    4. **Iterate**: Refine the configuration based on simulation results or user feedback.
+
+hooks:
+  - type: "FileJournal"
+    path: ".pisci/meta_journal.db"
+    enabled: true
+  - type: "PlanTracker"
+    enabled: true
+  - type: "ConfigAudit"
+    enabled: true

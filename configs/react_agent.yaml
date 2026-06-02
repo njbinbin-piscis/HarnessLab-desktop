@@ -1,0 +1,42 @@
+# ReAct Strategy Configuration
+# 
+# This configuration implements the ReAct (Reasoning + Acting) pattern,
+# where the agent interleaves reasoning steps with tool execution.
+# 
+# Key characteristics:
+# - Direct tool usage based on immediate reasoning
+# - No explicit planning phase
+# - Suitable for straightforward tasks with clear next steps
+
+agent:
+  name: "ReAct-Explorer"
+  model: "claude-sonnet-4.5"
+  context_window: 200000
+  max_tokens: 8192
+  fallback_models:
+    - "gpt-4o"
+    - "qwen-max"
+  enable_streaming: true
+
+plugins:
+  memory: "InMemoryVectorStore"
+  context: "ProjectContextManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: true
+  auto_compact_threshold: 100000
+  compaction_tiers:
+    micro_percent: 50
+    auto_percent: 70
+    full_percent: 90
+  max_tool_result_tokens: 4000
+
+strategy:
+  type: "react"
+  system_prompt_template: "You are a ReAct agent. For each step, think about what to do, then use a tool to do it. Format your response as:\nThought: <your reasoning>\nAction: <tool_name>\nAction Input: <json_input>"
+
+hooks:
+  - type: "FileJournal"
+    path: ".pisci/journal.db"
+    enabled: true
