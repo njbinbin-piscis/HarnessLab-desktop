@@ -1,0 +1,52 @@
+# Reproduction: tau-bench / tau2-bench (Yao et al. 2024; Barres et al. 2025)
+# Papers: "tau-bench: A Benchmark for Tool-Agent-User Interaction in Real-World
+#          Domains" (arXiv:2406.12045)
+#         "tau2-bench: Evaluating Conversational Agents in a Dual-Control
+#          Environment" (arXiv:2506.07982)
+# Benchmark: airline / retail / telecom domains, scored with pass^k reliability.
+#
+# Reproduction thesis: tau-bench tests whether an agent can hold a multi-turn
+# conversation with a simulated user, follow a domain policy, and call the right
+# tools against a database — reliably across k trials. The key paper finding is
+# that *native function-calling beats ReAct/Act* and that reliability (pass^k)
+# degrades sharply. In agent-workbench, the domain policy maps onto the
+# PolicyGate + confirm flags, and tools map onto user-defined domain tools.
+#
+# Controlled variable: confirm flags / policy strictness, plus strategy.type.
+# The harness drives the user simulator and computes pass^1..pass^k.
+
+agent:
+  name: "TauBench-PolicyAgent"
+  model: "claude-sonnet-4.5"
+  context_window: 128000
+  max_tokens: 2048
+  enable_streaming: false
+
+plugins:
+  memory: "NoOpMemory"            # each conversation is independent
+  context: "WorkspaceRootManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: true        # state-changing DB writes gated by domain policy
+  auto_compact_threshold: 0
+  max_tool_result_tokens: 4000
+
+strategy:
+  type: "react"
+  system_prompt_template: |
+    You are a customer-service agent for the {domain} domain. Strictly follow the
+    domain policy. Confirm the user's identity and intent before any state-changing
+    action. Use the provided domain tools (database APIs). Never fabricate data.
+    Ask the user for missing required information rather than guessing.
+
+hooks:
+  - type: "AuditLog"
+    level: "debug"               # full audit trail for policy-compliance scoring
+
+reproduction:
+  paper: "tau-bench (Yao et al., 2024) / tau2-bench (Barres et al., 2025)"
+  benchmark: "tau_bench"
+  domains: ["airline", "retail", "telecom"]
+  scorer: "pass_hat_k"
+  k: 8

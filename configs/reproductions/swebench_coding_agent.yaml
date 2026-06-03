@@ -1,0 +1,63 @@
+# Reproduction: SWE-bench (Jimenez et al., ICLR 2024) — coding agent arm
+# Paper: "SWE-bench: Can Language Models Resolve Real-World GitHub Issues?"
+#        (arXiv:2310.06770). Evaluated on SWE-bench Verified (500 human-filtered
+#        Python tasks) and the harder multi-language SWE-bench Pro (2026).
+#
+# Reproduction thesis: A SWE-bench agent must localize the bug, edit files, run
+# the test suite, and iterate. This maps directly onto agent-workbench's neutral
+# tool registry (file_read / file_search / file_edit / file_write / code_run /
+# shell). We compare react vs plan_and_solve on the SAME tool set to study the
+# effect of explicit planning on multi-file patches (the SWE-bench Pro regime).
+#
+# Controlled variable: strategy.type (react | plan_and_solve)
+# The harness runs the agent inside the per-task Docker workspace and scores with
+# the official SWE-bench test harness (FAIL_TO_PASS / PASS_TO_PASS).
+
+agent:
+  name: "SWEbench-Coder"
+  model: "claude-sonnet-4.5"
+  context_window: 200000
+  max_tokens: 8192
+  fallback_models:
+    - "qwen3-coder"
+  enable_streaming: true
+
+plugins:
+  memory: "InMemoryVectorStore"   # remember which files/tests were already inspected
+  context: "ProjectContextManager"
+
+policy:
+  confirm_shell: false            # autonomous: the workspace is a sandboxed clone
+  confirm_file_write: false
+  auto_compact_threshold: 150000  # long trajectories: many file reads + test logs
+  compaction_tiers:
+    micro_percent: 60
+    auto_percent: 80
+    full_percent: 95
+  max_tool_result_tokens: 8000    # test logs can be large
+  summary_model: "claude-haiku-4.5"
+
+strategy:
+  type: "plan_and_solve"
+  system_prompt_template: |
+    You are an autonomous software engineer resolving a real GitHub issue.
+    Workflow:
+      1. Reproduce: read the issue, locate relevant files (file_search / file_read).
+      2. Plan: outline the minimal patch and which tests will validate it.
+      3. Edit: apply changes with file_edit / file_write.
+      4. Verify: run the test suite with code_run / shell; iterate until green.
+    Keep the diff minimal and do not modify unrelated files.
+
+hooks:
+  - type: "FileJournal"
+    path: ".pisci/swebench_journal.jsonl"
+    enabled: true
+  - type: "PlanTracker"
+    enabled: true
+
+reproduction:
+  paper: "SWE-bench (Jimenez et al., 2024)"
+  benchmark: "swe_bench_verified"
+  scorer: "fail_to_pass"
+  tools: ["file_read", "file_search", "file_list", "file_edit", "file_write", "code_run", "shell"]
+  ablation_pair: "swebench_react_arm.yaml"   # strategy.type=react control arm

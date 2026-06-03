@@ -10,10 +10,10 @@ use serde::{Serialize, Deserialize};
 use anyhow::Result;
 
 use async_trait::async_trait;
-use pisci_kernel::agent::hooks::{
+use piscis_kernel::agent::hooks::{
     AgentHooks, ContextHookEvent, HookDecision, ToolHookEvent,
 };
-use pisci_kernel::agent::tool::ToolResult;
+use piscis_kernel::agent::tool::ToolResult;
 
 /// Performance metrics tracked by the evolution hook.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,0 +1,38 @@
+# Reflexion ablation — control arm: no memory (Shinn et al., 2023)
+#
+# Identical to reflexion_alfworld.yaml EXCEPT plugins.memory = NoOpMemory, so no
+# verbal reflections persist across trials. This isolates the episodic-memory
+# mechanism: the success@k curve should stay flat here while the Reflexion arm
+# improves across reflective retries.
+
+agent:
+  name: "Reflexion-NoMemory-ALFWorld"
+  model: "qwen-max"
+  context_window: 32000
+  max_tokens: 1024
+  enable_streaming: false
+
+plugins:
+  memory: "NoOpMemory"            # ablated: no cross-trial reflection store
+  context: "WorkspaceRootManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 0
+  max_tool_result_tokens: 2000
+
+strategy:
+  type: "react"
+  system_prompt_template: |
+    You are an agent acting in an environment. Use ReAct (Thought/Action/Observation).
+    Finish with: Action: finish[<result>]
+
+hooks:
+  - type: "AuditLog"
+    level: "info"
+
+reproduction:
+  paper: "Reflexion (Shinn et al., 2023)"
+  trials_per_task: 5
+  reflect_on_failure: false       # control: reflections disabled

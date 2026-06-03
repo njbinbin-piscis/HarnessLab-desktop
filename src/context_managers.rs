@@ -5,6 +5,52 @@ use std::path::Path;
 use anyhow::{Result, Context};
 use glob::glob;
 
+/// Adapter that exposes a workbench [`ContextManager`] through the kernel's
+/// [`piscis_kernel::context::ContextManager`] trait so it can be wired into the
+/// [`HarnessConfig`](piscis_kernel::agent::harness::HarnessConfig) context slot.
+///
+/// The kernel agent loop only calls `render`, so `discover` returns an empty
+/// kernel instruction list; the real discovery + rendering happens via the
+/// wrapped workbench manager, preserving its richer scan behaviour.
+pub struct KernelContextAdapter {
+    name: String,
+    inner: Box<dyn ContextManager>,
+}
+
+impl KernelContextAdapter {
+    pub fn new(name: impl Into<String>, inner: Box<dyn ContextManager>) -> Self {
+        Self {
+            name: name.into(),
+            inner,
+        }
+    }
+}
+
+impl piscis_kernel::context::ContextManager for KernelContextAdapter {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn discover(
+        &self,
+        _root: &Path,
+    ) -> std::io::Result<Vec<piscis_kernel::context::ProjectInstructionFile>> {
+        Ok(Vec::new())
+    }
+
+    fn render(&self, root: &Path, budget_chars: usize) -> std::io::Result<String> {
+        let entries = self
+            .inner
+            .discover(root)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let mut rendered = self.inner.render(&entries);
+        if rendered.chars().count() > budget_chars {
+            rendered = rendered.chars().take(budget_chars).collect();
+        }
+        Ok(rendered)
+    }
+}
+
 /// Deep scan context manager that looks for PISCI.md, .pisci/rules.md, and kb/architecture/*.md
 pub struct ProjectContextManager;
 

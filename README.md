@@ -2,12 +2,54 @@
 
 This module implements the YAML-based configuration parser for the Agent Workbench, enabling **0-code agent design** through declarative configuration files.
 
+## Experiment Platform (Phase 5)
+
+Beyond the configuration parser, the workbench is a full **pluggable / tunable /
+observable** experiment platform built on three pillars (see
+`kb/architecture/phase5_experiment_platform.md`):
+
+1. **Runtime** — the multi-layer pluggable harness (kernel + `exec`).
+2. **AI design assistant ("Architect", `configs/meta_agent.yaml`)** — a
+   first-class, itself-designable agent that authors new harness components and
+   agent configs. Component authoring + a `cargo build` regression gate live in
+   `backend/core/component_builder.py`; new Rust strategies register through the
+   kernel `contrib` registry (`piscis_kernel::agent::contrib`) and are selectable
+   by name in any YAML config.
+3. **Validation sets + observability** — `backend/core/datasets.py` (built-in
+   smoke sets + user JSONL), `evaluator.py` (agent × dataset, per-task
+   trajectory capture), and a persistent SQLite `store.py` for replay and
+   cross-run comparison.
+
+A self-improving loop (`backend/core/autoloop.py`) ties them together:
+propose → evaluate on a validation set → read score → revise.
+
+**Key HTTP endpoints** (FastAPI, `/api/v1`):
+
+| area | endpoints |
+|------|-----------|
+| component registry | `GET /registry`, `GET /registry/{kind}/{name}` |
+| validation sets | `GET/POST/DELETE /datasets`, `GET /datasets/{id}/tasks` |
+| evaluation runs | `POST /eval-runs`, `GET /eval-runs`, `/{id}`, `/{id}/stream`, `/{id}/tasks/{tid}/trajectory`, `/compare` |
+| design assistant | `GET /design/architect`, `POST /design/generate`, `POST /design/components/{python,rust,rust-alias}` |
+| self-improving loop | `POST /autoloop` |
+
+The unified component registry (`backend/core/registry.py`) catalogues every
+swappable part (coordinators, scorers, memory/context/loop/compaction) with a
+parameter schema, so the UI and the Architect can discover what is available.
+
+## `piscis-engine` dependency
+
+The Rust CLI links `piscis-kernel` as a **git dependency** pinned to tag
+**`v0.7.38`** (same rev as openpiscis and CodeZ). To hack the kernel locally,
+uncomment the `[patch]` block at the bottom of `Cargo.toml` and point it at a
+sibling `../piscis-engine` checkout.
+
 ## Architecture
 
 The configuration system consists of three layers:
 
 1. **YAML Structures** (`src/config.rs`): Serde-annotated Rust structs that map directly to YAML fields
-2. **Configuration Loader** (`src/loader.rs`): Bridges YAML config to `pisci_kernel::HarnessConfig`
+2. **Configuration Loader** (`src/loader.rs`): Bridges YAML config to `piscis_kernel::HarnessConfig`
 3. **Plugin Resolution**: Maps string identifiers to concrete trait implementations
 
 ## Quick Start
@@ -85,14 +127,51 @@ plugins:
   context: "ProjectContextManager"   # Context manager plugin
 ```
 
-**Supported Memory Plugins:**
-- `NoOpMemory` - Ephemeral, no persistence (for fish/short tasks)
+**Supported Memory Plugins:** (wired into the kernel `memory_plugin` slot; retrieved at run time and injected into the system prompt)
+- `NoOpMemory` - Ephemeral, no injection (behaviour-preserving default path)
 - `InMemoryVectorStore` - In-memory vector store for session-scoped memory
-- `SqliteMemory` - Persistent SQLite-backed memory (WIP)
+- `SqliteMemory` - Persistent SQLite-backed memory (WIP; currently falls back to the in-memory store)
 
-**Supported Context Managers:**
-- `ProjectContextManager` - Scans ancestor directories for instruction files (PISCI.md, etc.)
-- `WorkspaceRootManager` - Root-only scanning (WIP)
+Use `memory_retrieval_prompt` to control how retrieved memories are formatted into the prompt. The literal `{memories}` placeholder is replaced with the rendered hit list:
+
+```yaml
+plugins:
+  memory: "InMemoryVectorStore"
+  memory_retrieval_prompt: |
+    ## Relevant past context
+    {memories}
+```
+
+**Supported Context Managers:** (wired into the kernel `context_manager` slot; rendered at run time from the workspace root)
+- `ProjectContextManager` - Scans for `PISCI.md`, `.pisci/rules.md`, and `kb/architecture/*.md`
+- `WorkspaceRootManager` - Shallow scan of `README.md` / `PISCI.md`
+- `DynamicContextManager` - Semantic-search stub
+
+### Compression Configuration
+
+Selects the kernel `CompactionStrategy` algorithm (separate from the tier thresholds in `policy`):
+
+```yaml
+compression:
+  strategy: "summary_based"   # default: LLM rolling summary (DefaultCompaction)
+  # strategy: "sliding_window"   # token-budget truncation, no LLM call
+  # strategy: "vector_retrieval" # relevance-ranked retention of older messages
+  summarizer_prompt: null        # optional override for summary-based strategies (reserved)
+```
+
+### Tool Configuration
+
+```yaml
+enabled_tools:        # absent = all tools; [] = no tools; list = whitelist
+  - "file_read"
+  - "shell"
+```
+
+- Omit `enabled_tools` entirely → all built-in tools are registered.
+- `enabled_tools: []` → no tools (reasoning-only ablation).
+- `enabled_tools: [a, b]` → only those tools.
+
+The CLI `--tools a,b,c` / `--no-tools` flags override `enabled_tools` at run time.
 
 ### Policy Configuration
 
@@ -127,7 +206,14 @@ Hooks are injected at key lifecycle events:
 
 ## Strategy Switching
 
-The key benefit of this configuration system is **strategy switching without code changes**. To switch between ReAct and Plan-and-Solve patterns:
+> Note: today `strategy.type` selects only the system-prompt template; the agent
+> loop algorithm itself is the kernel's built-in ReAct loop. A pluggable
+> `LoopStrategy` abstraction (true Plan-and-Solve / Reflexion algorithm
+> switching, plus run-time steering) lands in Layer 2 of the workbench roadmap.
+> Until then, "strategy switching" means prompt + tool-set + plugin composition,
+> not a different control loop.
+
+To switch between ReAct and Plan-and-Solve prompt patterns:
 
 ### ReAct Strategy (`configs/react_agent.yaml`)
 - Direct tool usage based on immediate reasoning

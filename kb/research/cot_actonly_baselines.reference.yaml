@@ -1,0 +1,55 @@
+# Reproduction baselines for the ReAct ablation (Yao et al., 2023).
+#
+# This file documents the two *control* arms compared against react_hotpotqa.yaml.
+# agent-workbench expresses them as the same harness with one knob changed, which
+# is the core claim of the platform: ablations are configuration diffs, not code.
+#
+# NOTE: This is a multi-document YAML for documentation/registry purposes; the
+# benchmark harness loads each document as a separate experiment arm.
+
+# ── Arm A: Act-only (no reasoning traces) ────────────────────────────────────
+arm: "act_only"
+description: >
+  Ablates the "Thought" channel from ReAct. The agent may only emit Actions.
+  Expected: lower exact-match on HotpotQA vs. ReAct (paper Table 1).
+agent:
+  name: "ActOnly-HotpotQA"
+  model: "qwen-max"
+  context_window: 32000
+  max_tokens: 1024
+plugins:
+  memory: "NoOpMemory"
+  context: "WorkspaceRootManager"
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 0
+strategy:
+  type: "react"
+  system_prompt_template: |
+    Solve the task using ONLY Actions (no reasoning). Each step must be:
+      Action: web_search[<query>]   OR   finish[<answer>]
+    Do not output any "Thought:" lines.
+---
+# ── Arm B: Chain-of-Thought only (no tools, reason-then-answer) ───────────────
+arm: "cot_only"
+description: >
+  Pure CoT with no external retrieval. Tests whether tool use (the "Act" channel)
+  is what drives ReAct's gains. Expected: hallucination on knowledge-heavy hops.
+agent:
+  name: "CoT-HotpotQA"
+  model: "qwen-max"
+  context_window: 32000
+  max_tokens: 1024
+plugins:
+  memory: "NoOpMemory"
+  context: "WorkspaceRootManager"
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 0
+strategy:
+  type: "react"
+  system_prompt_template: |
+    Think step by step and then answer directly. You have NO tools.
+    End with: finish[<answer>]

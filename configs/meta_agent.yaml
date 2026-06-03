@@ -1,0 +1,78 @@
+# Meta-Agent — the "Architect" (Phase 5, Pillar 2)
+#
+# This is the AI experiment-design assistant, defined as a *first-class
+# workbench agent* so it is itself designable: its prompt, compression
+# strategy, memory backend, context manager and tools are all configured here
+# and can be swept / ablated like any other agent. Its job is to develop new
+# pluggable harness components, author new agent configs, and design experiments
+# for researchers — running on the very runtime it designs for (self-hosting).
+#
+# It is driven via `agent-workbench exec` (interactive session) by
+# backend/core/design.py; when no live engine is available the design flow
+# degrades to the deterministic template generator in meta_generator.py.
+
+agent:
+  name: "Architect"
+  # Model is provider-agnostic by name; the active provider/base_url come from
+  # the environment (PISCIS_PROVIDER / PISCIS_API_KEY / PISCIS_BASE_URL). The
+  # default below targets the DeepSeek provider configured in .env.
+  model: "deepseek-v4-flash"
+  context_window: 131072
+  max_tokens: 8192
+  enable_streaming: true
+
+plugins:
+  # The Architect benefits from episodic memory of prior designs + retrieval of
+  # design patterns; both are pluggable and can be ablated in experiments.
+  memory: "InMemoryVectorStore"
+  memory_retrieval_prompt: |
+    ## Relevant prior designs / patterns
+    {memories}
+  context: "ProjectContextManager"
+
+policy:
+  # The Architect writes component code and configs, so file writes are allowed;
+  # shell (for `cargo build` regression) requires confirmation by default.
+  confirm_shell: true
+  confirm_file_write: false
+  auto_compact_threshold: 100000
+  compaction_tiers:
+    micro_percent: 60
+    auto_percent: 80
+    full_percent: 95
+  max_tool_result_tokens: 6000
+
+compression:
+  strategy: "summary_based"
+
+strategy:
+  type: "plan_and_solve"
+  system_prompt_template: |
+    You are Architect, a senior AI-agent systems designer working inside the
+    Agent Workbench experiment platform.
+
+    Your mandate, on behalf of a researcher:
+      1. Design new pluggable HARNESS COMPONENTS (compaction / loop / memory /
+         context strategies in Rust, or coordinators / scorers in Python).
+      2. Create new AGENTS as YAML configs that compose the runtime's pluggable
+         slots (prompt + tools + memory + context + compaction + loop strategy).
+      3. Design EXPERIMENTS: pick a validation set, the arms to compare (the
+         single controlled knob that varies), the scorer, and the metrics.
+
+    Operating principles:
+      - Everything must be PLUGGABLE (addressed by name through the component
+        registry), TUNABLE (parameters surfaced explicitly), and OBSERVABLE
+        (runs persisted with per-task trajectories for comparison).
+      - Prefer the smallest controlled change that tests a hypothesis. State the
+        hypothesis, the controlled knob, and the expected effect.
+      - When you author a Rust component, write a complete, compiling item and a
+        registration line, then validate with a build + regression before
+        declaring it ready.
+      - Produce final config YAML that the workbench `validate` command accepts.
+
+    First produce a short PLAN, then execute it step by step, revising when an
+    observation (validation error, build failure, low score) requires it.
+
+hooks:
+  - type: "AuditLog"
+    enabled: true

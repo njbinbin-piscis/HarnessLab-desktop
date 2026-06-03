@@ -49,9 +49,49 @@ pub struct AgentConfig {
     /// Strategy configuration (optional).
     #[serde(default)]
     pub strategy: StrategyConfig,
+    /// Context-compaction algorithm selection (optional).
+    #[serde(default)]
+    pub compression: CompressionConfig,
+    /// Tool whitelist. Absent (`None`) = all built-in tools enabled; an empty
+    /// list (`[]`) = no tools (reasoning-only); a non-empty list = only those
+    /// tools. The CLI `--tools` / `--no-tools` flags override this at run time.
+    #[serde(default)]
+    pub enabled_tools: Option<Vec<String>>,
     /// Hook configuration (optional).
     #[serde(default)]
     pub hooks: Vec<HookConfig>,
+}
+
+/// Context-compaction algorithm configuration.
+///
+/// Selects which [`CompactionStrategy`] the kernel uses to shrink the
+/// conversation before each LLM call.
+///
+/// [`CompactionStrategy`]: piscis_kernel::agent::compaction_strategy::CompactionStrategy
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionConfig {
+    /// Strategy identifier. Supported values:
+    /// `"summary_based"` (default, LLM rolling summary), `"sliding_window"`
+    /// (token-budget truncation, no LLM), `"vector_retrieval"`
+    /// (relevance-ranked retention).
+    #[serde(default = "default_compression_strategy")]
+    pub strategy: String,
+    /// Optional override prompt for summary-based strategies (reserved).
+    #[serde(default)]
+    pub summarizer_prompt: Option<String>,
+}
+
+fn default_compression_strategy() -> String {
+    "summary_based".into()
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            strategy: default_compression_strategy(),
+            summarizer_prompt: None,
+        }
+    }
 }
 
 /// Agent identity and model settings.
@@ -112,6 +152,11 @@ pub struct PluginConfig {
     /// Supported values: "ProjectContextManager", "WorkspaceRootManager"
     #[serde(default = "default_context_manager")]
     pub context: String,
+    /// Optional template for formatting retrieved memories into the system
+    /// prompt. The literal `{memories}` placeholder is replaced with the
+    /// rendered hit list. When absent the kernel uses a built-in heading.
+    #[serde(default)]
+    pub memory_retrieval_prompt: Option<String>,
 }
 
 fn default_memory_plugin() -> String {
@@ -127,6 +172,7 @@ impl Default for PluginConfig {
         Self {
             memory: default_memory_plugin(),
             context: default_context_manager(),
+            memory_retrieval_prompt: None,
         }
     }
 }
@@ -426,6 +472,44 @@ hooks:
     }
 
     #[test]
+    fn test_parse_compression_and_tools() {
+        let yaml = r#"
+agent:
+  name: "Tooled"
+  model: "m"
+
+compression:
+  strategy: "sliding_window"
+
+enabled_tools:
+  - "file_read"
+  - "shell"
+
+plugins:
+  memory: "InMemoryVectorStore"
+  memory_retrieval_prompt: "Recall:\n{memories}"
+"#;
+        let config = AgentConfig::from_yaml(yaml).unwrap();
+        assert_eq!(config.compression.strategy, "sliding_window");
+        assert_eq!(
+            config.enabled_tools.as_deref(),
+            Some(["file_read".to_string(), "shell".to_string()].as_slice())
+        );
+        assert_eq!(
+            config.plugins.memory_retrieval_prompt.as_deref(),
+            Some("Recall:\n{memories}")
+        );
+    }
+
+    #[test]
+    fn test_compression_defaults_to_summary_based() {
+        let yaml = "agent:\n  name: \"D\"\n  model: \"m\"\n";
+        let config = AgentConfig::from_yaml(yaml).unwrap();
+        assert_eq!(config.compression.strategy, "summary_based");
+        assert!(config.enabled_tools.is_none());
+    }
+
+    #[test]
     fn test_roundtrip_serialization() {
         let original = AgentConfig {
             agent: AgentDefinition {
@@ -441,6 +525,7 @@ hooks:
             plugins: PluginConfig {
                 memory: "NoOpMemory".into(),
                 context: "ProjectContextManager".into(),
+                memory_retrieval_prompt: None,
             },
             policy: PolicyConfig {
                 confirm_shell: false,
@@ -456,6 +541,8 @@ hooks:
                 evolution: EvolutionPolicyConfig::default(),
             },
             strategy: StrategyConfig::default(),
+            compression: CompressionConfig::default(),
+            enabled_tools: None,
             hooks: vec![HookConfig {
                 hook_type: "AuditLog".into(),
                 params: serde_yaml::Value::Mapping(Default::default()),

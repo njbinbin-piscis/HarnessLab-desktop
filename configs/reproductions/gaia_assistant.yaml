@@ -1,0 +1,55 @@
+# Reproduction: GAIA (Mialon et al., ICLR 2024)
+# Paper: "GAIA: A Benchmark for General AI Assistants" (arXiv:2311.12983)
+# Benchmark: GAIA validation set (165 questions, 3 difficulty levels)
+#
+# Reproduction thesis: GAIA tasks are simple for humans (92%) but hard for
+# tool-augmented LLMs. Solving them needs reasoning + web browsing + file
+# handling + code. We express a GAIA assistant as a react agent with the
+# search/file/code tools, then ablate tool availability per level to reproduce
+# the paper's finding that performance collapses without retrieval (Level 1->3).
+#
+# Controlled variable: enabled tool set (reasoning-only vs +search vs +code/file)
+
+agent:
+  name: "GAIA-Assistant"
+  model: "claude-sonnet-4.5"
+  context_window: 200000
+  max_tokens: 4096
+  fallback_models:
+    - "gpt-4o"
+  enable_streaming: true
+
+plugins:
+  memory: "InMemoryVectorStore"
+  context: "WorkspaceRootManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 120000
+  compaction_tiers:
+    micro_percent: 55
+    auto_percent: 75
+    full_percent: 92
+  max_tool_result_tokens: 6000
+  summary_model: "claude-haiku-4.5"
+
+strategy:
+  type: "react"
+  system_prompt_template: |
+    You are a general AI assistant. Answer the question with an EXACT final answer.
+    Decompose multi-step questions, use web_search for facts, code_run for
+    computation, and file_read to inspect attached files. Verify before answering.
+    End with exactly: "FINAL ANSWER: <answer>" following GAIA formatting rules
+    (no units unless asked, comma-separated lists, minimal formatting).
+
+hooks:
+  - type: "AuditLog"
+    level: "info"
+
+reproduction:
+  paper: "GAIA (Mialon et al., 2023)"
+  benchmark: "gaia_validation"
+  scorer: "exact_match"
+  tools: ["web_search", "file_read", "code_run"]
+  levels: [1, 2, 3]

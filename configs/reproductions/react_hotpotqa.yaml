@@ -1,0 +1,48 @@
+# Reproduction: ReAct (Yao et al., ICLR 2023)
+# Paper: "ReAct: Synergizing Reasoning and Acting in Language Models" (arXiv:2210.03629)
+# Benchmark: HotpotQA (multi-hop QA) / Fever
+#
+# Reproduction thesis: ReAct interleaves free-form reasoning ("Thought") with
+# tool actions ("Act") and observations. In agent-workbench this is the `react`
+# strategy with a search tool and NO explicit planning phase. This config is the
+# experimental *treatment* in the ReAct-vs-ActOnly / ReAct-vs-CoT ablation.
+#
+# Controlled variable: strategy.type = react (reasoning traces enabled)
+# Held constant across the ablation: model, tools, max_tokens, temperature.
+
+agent:
+  name: "ReAct-HotpotQA"
+  model: "qwen-max"
+  context_window: 32000
+  max_tokens: 1024
+  fallback_models:
+    - "gpt-4o"
+  enable_streaming: false
+
+plugins:
+  memory: "NoOpMemory"          # single-episode: no cross-trial memory (matches paper)
+  context: "WorkspaceRootManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 0     # disabled: ReAct trajectories are short
+  compaction_tiers:
+    micro_percent: 50
+    auto_percent: 70
+    full_percent: 90
+  max_tool_result_tokens: 2000
+
+strategy:
+  type: "react"
+  system_prompt_template: |
+    Solve a question answering task with interleaving Thought, Action, Observation steps.
+    Thought reasons about the current situation. Action retrieves external evidence via
+    the web_search tool. After enough evidence, answer with: "Action: finish[<answer>]".
+    Use the canonical ReAct format:
+      Thought: <reasoning>
+      Action: web_search[<query>]   OR   finish[<answer>]
+
+hooks:
+  - type: "AuditLog"
+    level: "info"

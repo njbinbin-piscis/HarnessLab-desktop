@@ -1,3 +1,7 @@
+# ── Secrets / local env ─────────────────────────────────
+.env
+.env.local
+
 # ── Rust ────────────────────────────────────────────────
 /target/
 **/target/
@@ -22,6 +26,11 @@ dist/
 .koi-worktrees/
 .pisci/
 .codez/
+
+# ── Experiment platform: uploaded validation sets & downloaded benchmark data ─
+/data/
+results/
+figs/
 
 # ── Editor / OS ─────────────────────────────────────────
 .DS_Store

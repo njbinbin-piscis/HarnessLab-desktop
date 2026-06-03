@@ -1,7 +1,7 @@
 use agent_workbench::config::AgentConfig;
 use agent_workbench::loader::build_harness_config;
-use pisci_kernel::agent::tool::ToolRegistry;
-use pisci_kernel::policy::PolicyGate;
+use piscis_kernel::agent::tool::ToolRegistry;
+use piscis_kernel::policy::PolicyGate;
 use std::sync::Arc;
 
 /// Runs a benchmark test for a given configuration file.

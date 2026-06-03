@@ -1,0 +1,50 @@
+# SWE-bench ablation — control arm: react (Jimenez et al., 2024)
+#
+# Identical to swebench_coding_agent.yaml EXCEPT strategy.type = react (no
+# explicit planning phase). Comparing the two isolates the effect of planning on
+# multi-file patches — the SWE-bench Pro regime where average patches span ~4
+# files / ~107 lines.
+
+agent:
+  name: "SWEbench-Coder-ReAct"
+  model: "claude-sonnet-4.5"
+  context_window: 200000
+  max_tokens: 8192
+  fallback_models:
+    - "qwen3-coder"
+  enable_streaming: true
+
+plugins:
+  memory: "InMemoryVectorStore"
+  context: "ProjectContextManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 150000
+  compaction_tiers:
+    micro_percent: 60
+    auto_percent: 80
+    full_percent: 95
+  max_tool_result_tokens: 8000
+  summary_model: "claude-haiku-4.5"
+
+strategy:
+  type: "react"
+  system_prompt_template: |
+    You are an autonomous software engineer resolving a real GitHub issue.
+    Use ReAct: for each step, reason briefly then take a tool action
+    (file_search / file_read / file_edit / file_write / code_run / shell).
+    Reproduce the bug, fix it with a minimal patch, and run the tests until
+    they pass. Do not modify unrelated files.
+
+hooks:
+  - type: "FileJournal"
+    path: ".pisci/swebench_react_journal.jsonl"
+    enabled: true
+
+reproduction:
+  paper: "SWE-bench (Jimenez et al., 2024)"
+  benchmark: "swe_bench_verified"
+  scorer: "fail_to_pass"
+  tools: ["file_read", "file_search", "file_list", "file_edit", "file_write", "code_run", "shell"]

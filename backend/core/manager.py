@@ -4,7 +4,7 @@ import asyncio
 import time
 import uuid
 from datetime import datetime
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 
 from backend.models.schemas import (
     ExperimentState,
@@ -13,6 +13,12 @@ from backend.models.schemas import (
     ValidationResult,
 )
 from backend.core.streaming import EventStream, create_event_stream
+from backend.core.swarm import (
+    Coordinator,
+    CoordinationContext,
+    MessageBus,
+    extract_final,
+)
 
 
 class ExperimentManager:
@@ -177,3 +183,168 @@ _global_manager = ExperimentManager()
 def get_experiment_manager() -> ExperimentManager:
     """Get the global experiment manager instance."""
     return _global_manager
+
+
+class MultiAgentSession:
+    """Concurrently manage N long-lived agent sessions and fan-in their events.
+
+    Each value in ``sessions`` is an
+    :class:`~backend.core.engine.InteractiveSession`-like object exposing
+    ``start`` / ``events`` / ``send_prompt`` / ``inject`` / ``close``. A reader
+    task per agent pumps that agent's NDJSON events into a per-agent queue so
+    the orchestrator can drive turns one agent at a time while still surfacing
+    a merged stream.
+    """
+
+    def __init__(self, sessions: Dict[str, Any]) -> None:
+        self._sessions = sessions
+        self._queues: Dict[str, asyncio.Queue] = {n: asyncio.Queue() for n in sessions}
+        self._tasks: List[asyncio.Task] = []
+
+    @property
+    def names(self) -> List[str]:
+        return list(self._sessions)
+
+    async def start_all(self, ready_timeout: float = 10.0) -> None:
+        for name, session in self._sessions.items():
+            await session.start()
+            self._tasks.append(asyncio.create_task(self._pump(name, session)))
+        # Best-effort: consume the initial `session_ready` envelope per agent so
+        # turn reads start from a clean queue.
+        for name in self._sessions:
+            try:
+                while True:
+                    ev = await asyncio.wait_for(self._queues[name].get(), ready_timeout)
+                    if ev.get("type") in ("session_ready", "agent_closed", "error"):
+                        break
+            except asyncio.TimeoutError:
+                pass
+
+    async def _pump(self, name: str, session: Any) -> None:
+        try:
+            async for event in session.events():
+                await self._queues[name].put(event)
+        finally:
+            await self._queues[name].put({"type": "agent_closed"})
+
+    async def next_event(self, name: str) -> Dict[str, Any]:
+        return await self._queues[name].get()
+
+    async def send_prompt(self, name: str, text: str) -> None:
+        await self._sessions[name].send_prompt(text)
+
+    async def inject(self, name: str, text: str) -> None:
+        await self._sessions[name].inject(text)
+
+    async def close_all(self) -> None:
+        for session in self._sessions.values():
+            try:
+                await session.close()
+            except Exception:
+                pass
+        for task in self._tasks:
+            task.cancel()
+
+
+class SwarmOrchestrator:
+    """Drive a multi-agent swarm using a pluggable :class:`Coordinator`.
+
+    The orchestrator is the *Meta-Agent*: each round it reads the shared
+    :class:`MessageBus` history, asks the coordinator who to activate next (and
+    what to say), runs that agent's turn, and posts the agent's answer back to
+    the bus — until the coordinator declares the swarm done or the round budget
+    is exhausted.
+
+    Events from each agent turn are tagged with the agent name and forwarded to
+    ``out_queue`` (when provided) so an SSE endpoint can stream the whole swarm.
+    """
+
+    def __init__(
+        self,
+        multi: MultiAgentSession,
+        coordinator: Coordinator,
+        bus: MessageBus,
+        task: str,
+        max_rounds: int = 8,
+        out_queue: Optional[asyncio.Queue] = None,
+    ) -> None:
+        self.multi = multi
+        self.coordinator = coordinator
+        self.bus = bus
+        self.task = task
+        self.max_rounds = max_rounds
+        self.out_queue = out_queue
+
+    async def _emit(self, event: Dict[str, Any]) -> None:
+        if self.out_queue is not None:
+            await self.out_queue.put(event)
+
+    async def _run_agent_turn(self, name: str, message: str) -> str:
+        """Send one prompt to ``name`` and collect its assistant text."""
+        await self.multi.send_prompt(name, message)
+        text_parts: List[str] = []
+        while True:
+            event = await self.multi.next_event(name)
+            tagged = dict(event)
+            tagged["agent"] = name
+            await self._emit(tagged)
+            etype = event.get("type")
+            if etype == "text_delta":
+                text_parts.append(event.get("delta", ""))
+            elif etype in ("turn_complete", "agent_closed", "error"):
+                break
+        return "".join(text_parts).strip()
+
+    async def run(self) -> Dict[str, Any]:
+        """Run the coordination loop to completion. Returns a result summary."""
+        await self._emit({"type": "swarm_start", "task": self.task, "agents": self.multi.names})
+
+        final: Optional[str] = None
+        rounds_run = 0
+        for round_idx in range(self.max_rounds):
+            rounds_run = round_idx + 1
+            ctx = CoordinationContext(
+                task=self.task,
+                agents=self.multi.names,
+                transcript=self.bus.history(),
+                round=round_idx,
+                max_rounds=self.max_rounds,
+            )
+            decision = self.coordinator.coordinate(ctx)
+            await self._emit(
+                {
+                    "type": "coordination",
+                    "round": round_idx,
+                    "coordinator": getattr(self.coordinator, "name", "?"),
+                    "next_agent": decision.next_agent,
+                    "done": decision.done,
+                    "metadata": decision.metadata,
+                }
+            )
+
+            if decision.done:
+                final = decision.final
+                break
+
+            if not decision.next_agent:
+                # Coordinator yielded nothing actionable; stop to avoid spinning.
+                break
+
+            prompt = decision.message or self.task
+            answer = await self._run_agent_turn(decision.next_agent, prompt)
+            self.bus.post(decision.next_agent, answer)
+
+            # Early exit if the agent itself declared a final answer.
+            agent_final = extract_final(answer)
+            if agent_final and getattr(self.coordinator, "name", "") == "blackboard":
+                final = agent_final
+                break
+
+        result = {
+            "type": "swarm_complete",
+            "final": final,
+            "rounds": rounds_run,
+            "transcript": self.bus.history(),
+        }
+        await self._emit(result)
+        return result

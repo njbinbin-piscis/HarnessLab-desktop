@@ -10,6 +10,7 @@ from backend.models.schemas import (
     AgentEvent,
 )
 from backend.core.manager import get_experiment_manager
+from backend.core.runner import schedule_experiment
 from backend.core.streaming import create_event_stream
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
@@ -45,9 +46,17 @@ async def start_experiment(request: ExperimentRequest):
         workspace_path=request.workspace_path
     )
     
-    # Start the experiment (in real implementation, this would spawn async execution)
     await manager.start_experiment(experiment_id)
-    
+
+    schedule_experiment(
+        manager,
+        experiment_id,
+        config,
+        request.config_yaml,
+        request.workspace_path,
+        request.prompt,
+    )
+
     return ExperimentResponse(
         experiment_id=experiment_id,
         status="running"

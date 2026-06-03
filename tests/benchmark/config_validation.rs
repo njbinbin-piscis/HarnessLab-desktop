@@ -1,8 +1,8 @@
 mod config_loader;
 
 use std::path::PathBuf;
-use pisci_kernel::agent::tool::ToolRegistry;
-use pisci_kernel::policy::PolicyGate;
+use piscis_kernel::agent::tool::ToolRegistry;
+use piscis_kernel::policy::PolicyGate;
 use std::sync::Arc;
 use agent_workbench::config::AgentConfig as KernelAgentConfig;
 use agent_workbench::loader::build_harness_config;

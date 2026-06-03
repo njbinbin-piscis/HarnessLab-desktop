@@ -1,0 +1,37 @@
+# Qwen default agent — uses qwen3.6-plus via DashScope
+#
+# Credentials: set PISCIS_API_KEY in .env (see .env.example)
+
+agent:
+  name: "Qwen-Agent"
+  model: "qwen3.6-plus"
+  context_window: 128000
+  max_tokens: 8192
+  fallback_models:
+    - "qwen-max"
+    - "qwen-plus"
+  enable_streaming: true
+
+plugins:
+  memory: "InMemoryVectorStore"
+  context: "ProjectContextManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: true
+  auto_compact_threshold: 100000
+  compaction_tiers:
+    micro_percent: 50
+    auto_percent: 70
+    full_percent: 90
+  max_tool_result_tokens: 4000
+
+strategy:
+  type: "react"
+  system_prompt_template: |
+    You are a helpful AI agent. Think step by step, use tools when needed,
+    and give clear final answers.
+
+hooks:
+  - type: "AuditLog"
+    level: "info"

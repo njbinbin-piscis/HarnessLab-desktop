@@ -60,7 +60,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "glob",
- "pisci-kernel",
+ "piscis-kernel",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2223,8 +2223,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "pisci-core"
-version = "0.7.8"
+name = "piscis-core"
+version = "0.7.38"
+source = "git+https://github.com/njbinbin-piscis/piscis-engine.git?rev=v0.7.38#38d4134ab708a5ecf1d1c44bd43fd126b8cb6d74"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2234,8 +2235,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "pisci-kernel"
-version = "0.7.8"
+name = "piscis-kernel"
+version = "0.7.38"
+source = "git+https://github.com/njbinbin-piscis/piscis-engine.git?rev=v0.7.38#38d4134ab708a5ecf1d1c44bd43fd126b8cb6d74"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2252,7 +2254,7 @@ dependencies = [
  "lopdf",
  "once_cell",
  "pdf-extract",
- "pisci-core",
+ "piscis-core",
  "regex",
  "reqwest",
  "rusqlite",

@@ -1,18 +1,21 @@
 //! Configuration loader that builds `HarnessConfig` from YAML.
 //!
 //! This module provides the bridge between declarative YAML configuration
-//! and the runtime `pisci_kernel::agent::harness::HarnessConfig`.
+//! and the runtime `piscis_kernel::agent::harness::HarnessConfig`.
 
 use std::sync::Arc;
 
-use pisci_kernel::agent::harness::{HarnessConfig, LayeredPrompt};
-use pisci_kernel::agent::harness::config::{CompactionSettings, ConfirmFlags};
-use pisci_kernel::agent::tool::ToolRegistry;
-use pisci_kernel::policy::PolicyGate;
+use piscis_kernel::agent::harness::{HarnessConfig, LayeredPrompt};
+use piscis_kernel::agent::harness::config::{CompactionSettings, ConfirmFlags};
+use piscis_kernel::agent::loop_::resolve_compaction_strategy;
+use piscis_kernel::agent::loop_strategy::resolve_loop_strategy;
+use piscis_kernel::agent::tool::ToolRegistry;
+use piscis_kernel::memory::plugin::{InMemoryVectorStore, MemoryPlugin};
+use piscis_kernel::policy::PolicyGate;
 
 use crate::config::AgentConfig;
 use crate::context_managers::{
-    DynamicContextManager, ProjectContextManager, WorkspaceRootManager,
+    DynamicContextManager, KernelContextAdapter, ProjectContextManager, WorkspaceRootManager,
 };
 use crate::hooks::WorkbenchHooks;
 use crate::plugins::ContextManager;
@@ -34,6 +37,12 @@ pub enum ConfigLoadError {
 
     #[error("Unknown context manager: {0}")]
     UnknownContextManager(String),
+
+    #[error("Unknown compaction strategy: {0}")]
+    UnknownCompactionStrategy(String),
+
+    #[error("Unknown loop strategy: {0}")]
+    UnknownLoopStrategy(String),
 
     #[error("Invalid configuration: {0}")]
     InvalidConfig(String),
@@ -59,12 +68,14 @@ pub fn build_harness_config(
     policy: Arc<PolicyGate>,
     project_dir: Option<&std::path::Path>,
 ) -> Result<HarnessConfig, ConfigLoadError> {
+    // project_dir is retained for API stability; project-context discovery now
+    // happens at run time inside the kernel via the wired context-manager slot,
+    // keyed off the agent loop's workspace root.
+    let _ = project_dir;
+
     let agent = &agent_config.agent;
     let plugins = &agent_config.plugins;
     let policy_cfg = &agent_config.policy;
-
-    // Validate the configured memory plugin up front so typos fail loudly.
-    validate_memory_plugin(&plugins.memory)?;
 
     // Build confirmation flags from policy config.
     let confirm_flags = ConfirmFlags {
@@ -72,7 +83,7 @@ pub fn build_harness_config(
         confirm_file_write: policy_cfg.confirm_file_write,
     };
 
-    // Build compaction settings from policy config.
+    // Build compaction settings (tiers / caps) from policy config.
     let compaction = CompactionSettings {
         micro_percent: policy_cfg.compaction_tiers.micro_percent,
         auto_percent: policy_cfg.compaction_tiers.auto_percent,
@@ -81,7 +92,29 @@ pub fn build_harness_config(
         summary_model: policy_cfg.summary_model.clone(),
     };
 
-    // Create the base system prompt from the strategy config.
+    // Resolve the pluggable compaction *algorithm* (separate from the tier
+    // thresholds above). Unknown names fail loudly.
+    let compaction_strategy = resolve_compaction_strategy(
+        &agent_config.compression.strategy,
+        agent_config.compression.summarizer_prompt.clone(),
+    )
+    .ok_or_else(|| {
+        ConfigLoadError::UnknownCompactionStrategy(agent_config.compression.strategy.clone())
+    })?;
+
+    // Resolve the kernel-side context manager (drives runtime context injection)
+    // and the optional long-term memory backend.
+    let context_manager = resolve_kernel_context_manager(&plugins.context)?;
+    let memory_plugin = resolve_memory_plugin(&plugins.memory)?;
+
+    // Resolve the loop-control strategy from `strategy.type`.
+    let loop_strategy = resolve_loop_strategy(&agent_config.strategy.strategy_type)
+        .ok_or_else(|| {
+            ConfigLoadError::UnknownLoopStrategy(agent_config.strategy.strategy_type.clone())
+        })?;
+
+    // Create the base system prompt from the strategy config. Project context
+    // is no longer folded in here; the kernel renders it at run time.
     let base_prompt = if agent_config.strategy.system_prompt_template.is_empty() {
         format!(
             "You are {}. Follow the user's instructions carefully.",
@@ -91,37 +124,27 @@ pub fn build_harness_config(
         agent_config.strategy.system_prompt_template.clone()
     };
 
-    // Resolve the configured context manager and inject any discovered
-    // project context ahead of the strategy prompt. The kernel `HarnessConfig`
-    // has no dedicated context-manager slot, so the workbench performs context
-    // discovery here and folds the rendered result into the layered prompt.
-    let system_prompt = match project_dir {
-        Some(dir) => {
-            let manager = resolve_context_manager(&plugins.context)?;
-            let rendered = manager
-                .discover(dir)
-                .map(|entries| manager.render(&entries))
-                .unwrap_or_default();
-            if rendered.trim().is_empty() {
-                base_prompt
-            } else {
-                format!("{rendered}\n\n{base_prompt}")
-            }
-        }
-        None => base_prompt,
-    };
-
     // Start building the harness config using the builder pattern.
     let mut builder = HarnessConfig::builder("workbench", &agent.model, registry, policy)
         .with_fallback_models(agent.fallback_models.clone())
-        .with_layered_prompt(LayeredPrompt::from_monolithic(system_prompt))
+        .with_layered_prompt(LayeredPrompt::from_monolithic(base_prompt))
         .with_max_tokens(agent.max_tokens)
         .with_context_window(agent.context_window)
         .with_confirm_flags(confirm_flags)
         .with_vision_override(agent.vision_override)
         .with_auto_compact_threshold(policy_cfg.auto_compact_threshold)
         .with_compaction_settings(&compaction)
+        .with_compaction_strategy(compaction_strategy)
+        .with_context_manager(context_manager)
+        .with_loop_strategy(loop_strategy)
         .with_streaming(agent.enable_streaming);
+
+    // Wire the long-term memory backend + retrieval prompt when configured.
+    if let Some(memory) = memory_plugin {
+        builder = builder
+            .with_memory_plugin(memory)
+            .with_memory_retrieval_prompt(plugins.memory_retrieval_prompt.clone());
+    }
 
     // Wire vision delegate model if specified.
     if let Some(ref vision_model) = agent.vision_model {
@@ -186,15 +209,39 @@ pub fn resolve_context_manager(
     }
 }
 
-/// Validate that a memory-plugin identifier is one the workbench understands.
+/// Resolve a context-manager identifier to a kernel-trait object suitable for
+/// the [`HarnessConfig`] context slot. Wraps the workbench manager in a
+/// [`KernelContextAdapter`] so its richer scan behaviour is preserved while the
+/// kernel drives runtime injection.
+pub fn resolve_kernel_context_manager(
+    name: &str,
+) -> Result<Arc<dyn piscis_kernel::context::ContextManager>, ConfigLoadError> {
+    let inner = resolve_context_manager(name)?;
+    Ok(Arc::new(KernelContextAdapter::new(name, inner)))
+}
+
+/// Resolve a memory-plugin identifier to an optional kernel memory backend.
 ///
-/// The kernel `HarnessConfig` exposes no memory-plugin slot, so this performs
-/// validation only; resolution to a concrete store happens at run time.
-pub fn validate_memory_plugin(name: &str) -> Result<(), ConfigLoadError> {
+/// `NoOpMemory` resolves to `None` (no injection, behaviour-preserving), while
+/// `InMemoryVectorStore` / `SqliteMemory` resolve to a concrete store.
+/// `SqliteMemory` currently falls back to the in-memory store (persistent
+/// backend WIP). Unknown identifiers fail loudly.
+pub fn resolve_memory_plugin(
+    name: &str,
+) -> Result<Option<Arc<dyn MemoryPlugin>>, ConfigLoadError> {
     match name {
-        "NoOpMemory" | "InMemoryVectorStore" | "SqliteMemory" => Ok(()),
+        "NoOpMemory" => Ok(None),
+        "InMemoryVectorStore" => Ok(Some(Arc::new(InMemoryVectorStore::new()))),
+        // Persistent SQLite backend is not implemented yet; fall back to the
+        // session-scoped in-memory store so the slot is still functional.
+        "SqliteMemory" => Ok(Some(Arc::new(InMemoryVectorStore::new()))),
         other => Err(ConfigLoadError::UnknownMemoryPlugin(other.to_string())),
     }
+}
+
+/// Validate that a memory-plugin identifier is one the workbench understands.
+pub fn validate_memory_plugin(name: &str) -> Result<(), ConfigLoadError> {
+    resolve_memory_plugin(name).map(|_| ())
 }
 
 /// Load an agent configuration from a YAML file and build a `HarnessConfig`.
@@ -295,6 +342,110 @@ plugins:
     }
 
     #[test]
+    fn test_memory_plugin_resolution() {
+        // NoOpMemory => no plugin wired (behaviour-preserving default path).
+        assert!(resolve_memory_plugin("NoOpMemory").unwrap().is_none());
+        // Concrete stores resolve to Some.
+        assert!(resolve_memory_plugin("InMemoryVectorStore").unwrap().is_some());
+        assert!(resolve_memory_plugin("SqliteMemory").unwrap().is_some());
+        // Unknown identifiers fail loudly.
+        assert!(matches!(
+            resolve_memory_plugin("Nonsense"),
+            Err(ConfigLoadError::UnknownMemoryPlugin(_))
+        ));
+    }
+
+    #[test]
+    fn test_compaction_strategy_selectable_via_yaml() {
+        for strategy in ["summary_based", "sliding_window", "vector_retrieval"] {
+            let yaml = format!(
+                "agent:\n  name: \"C\"\n  model: \"m\"\ncompression:\n  strategy: \"{strategy}\"\n"
+            );
+            let config = AgentConfig::from_yaml(&yaml).unwrap();
+            let (reg, policy) = test_scaffolding();
+            let harness =
+                build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp"))).unwrap();
+            assert!(
+                harness.compaction_strategy.is_some(),
+                "{strategy} should wire a compaction strategy"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unknown_compaction_strategy_error() {
+        let yaml = "agent:\n  name: \"C\"\n  model: \"m\"\ncompression:\n  strategy: \"bogus\"\n";
+        let config = AgentConfig::from_yaml(yaml).unwrap();
+        let (reg, policy) = test_scaffolding();
+        let result = build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp")));
+        assert!(matches!(
+            result,
+            Err(ConfigLoadError::UnknownCompactionStrategy(_))
+        ));
+    }
+
+    #[test]
+    fn test_memory_plugin_wired_into_harness() {
+        let yaml = "agent:\n  name: \"M\"\n  model: \"m\"\nplugins:\n  memory: \"InMemoryVectorStore\"\n  memory_retrieval_prompt: \"## Recall\\n{memories}\"\n";
+        let config = AgentConfig::from_yaml(yaml).unwrap();
+        let (reg, policy) = test_scaffolding();
+        let harness =
+            build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp"))).unwrap();
+        assert!(harness.memory_plugin.is_some(), "memory plugin should be wired");
+        assert_eq!(
+            harness.memory_retrieval_prompt.as_deref(),
+            Some("## Recall\n{memories}")
+        );
+
+        // NoOpMemory leaves the slot empty (behaviour-preserving).
+        let bare = AgentConfig::from_yaml(
+            "agent:\n  name: \"M\"\n  model: \"m\"\nplugins:\n  memory: \"NoOpMemory\"\n",
+        )
+        .unwrap();
+        let (reg2, policy2) = test_scaffolding();
+        let h2 = build_harness_config(&bare, reg2, policy2, Some(&PathBuf::from("/tmp"))).unwrap();
+        assert!(h2.memory_plugin.is_none());
+    }
+
+    #[test]
+    fn test_loop_strategy_selected_from_type() {
+        for (ty, expected) in [
+            ("react", "react"),
+            ("plan_and_solve", "plan_and_solve"),
+            ("reflexion", "reflexion"),
+        ] {
+            let yaml = format!(
+                "agent:\n  name: \"S\"\n  model: \"m\"\nstrategy:\n  type: \"{ty}\"\n"
+            );
+            let config = AgentConfig::from_yaml(&yaml).unwrap();
+            let (reg, policy) = test_scaffolding();
+            let harness =
+                build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp"))).unwrap();
+            let strat = harness.loop_strategy.expect("loop strategy should be wired");
+            assert_eq!(strat.name(), expected);
+        }
+    }
+
+    #[test]
+    fn test_unknown_loop_strategy_error() {
+        let yaml = "agent:\n  name: \"S\"\n  model: \"m\"\nstrategy:\n  type: \"telepathy\"\n";
+        let config = AgentConfig::from_yaml(yaml).unwrap();
+        let (reg, policy) = test_scaffolding();
+        let result = build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp")));
+        assert!(matches!(result, Err(ConfigLoadError::UnknownLoopStrategy(_))));
+    }
+
+    #[test]
+    fn test_context_manager_always_wired() {
+        let yaml = "agent:\n  name: \"C\"\n  model: \"m\"\n";
+        let config = AgentConfig::from_yaml(yaml).unwrap();
+        let (reg, policy) = test_scaffolding();
+        let harness =
+            build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp"))).unwrap();
+        assert!(harness.context_manager.is_some());
+    }
+
+    #[test]
     fn test_context_injected_into_system_prompt() {
         let dir = tempfile::TempDir::new().unwrap();
         std::fs::write(dir.path().join("PISCI.md"), "PROJECT_RULE_MARKER").unwrap();
@@ -316,9 +467,19 @@ strategy:
         let harness =
             build_harness_config(&config, reg, policy, Some(dir.path())).unwrap();
 
+        // The strategy prompt stays in the layered prompt; project context is
+        // now rendered at run time via the wired context-manager slot.
         let prompt = harness.layered_prompt.render();
-        assert!(prompt.contains("PROJECT_RULE_MARKER"), "context should be injected");
         assert!(prompt.contains("STRATEGY_PROMPT_MARKER"), "strategy prompt should remain");
+        assert!(!prompt.contains("PROJECT_RULE_MARKER"), "context is no longer folded into the prompt");
+
+        let rendered_ctx = harness
+            .render_project_context(dir.path(), 8_000)
+            .unwrap();
+        assert!(
+            rendered_ctx.contains("PROJECT_RULE_MARKER"),
+            "context should be discoverable via the context-manager slot"
+        );
     }
 
     #[test]

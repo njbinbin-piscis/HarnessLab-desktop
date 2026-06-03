@@ -53,7 +53,13 @@ backend/
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the server
+# Configure LLM (copy and edit)
+cp ../.env.example ../.env
+# PISCIS_PROVIDER=qwen
+# PISCIS_API_KEY=sk-...
+# PISCIS_DEFAULT_MODEL=qwen3.6-plus
+
+# Run the server (auto-loads ../.env)
 python -m backend.main
 
 # Or with uvicorn directly

@@ -1,5 +1,9 @@
 """Agent Workbench Visualization Platform - Main Application."""
 
+from backend.core.env import load_env
+
+load_env()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

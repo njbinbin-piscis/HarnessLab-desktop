@@ -1,5 +1,5 @@
 use std::time::Instant;
-use pisci_kernel::agent::hooks::{AgentHooks, HookContext};
+use piscis_kernel::agent::hooks::{AgentHooks, HookContext};
 
 /// A hook that records timing information for tool executions and LLM calls.
 pub struct TimingHook {

@@ -1,0 +1,43 @@
+# ReAct ablation — Arm B: CoT-only (Yao et al., 2023)
+#
+# Pure chain-of-thought with NO external retrieval. Tests whether the "Act"
+# channel (tool use) is what drives ReAct's gains. Same model / token budget as
+# react_hotpotqa.yaml; the difference is no tools + reason-then-answer prompt.
+# Expected: hallucination on knowledge-heavy multi-hop questions.
+
+agent:
+  name: "CoT-HotpotQA"
+  model: "qwen-max"
+  context_window: 32000
+  max_tokens: 1024
+  fallback_models:
+    - "gpt-4o"
+  enable_streaming: false
+
+plugins:
+  memory: "NoOpMemory"
+  context: "WorkspaceRootManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 0
+  compaction_tiers:
+    micro_percent: 50
+    auto_percent: 70
+    full_percent: 90
+  max_tool_result_tokens: 2000
+
+strategy:
+  type: "react"
+  system_prompt_template: |
+    Think step by step and then answer directly. You have NO tools and cannot
+    retrieve external information. Reason from your own knowledge, then end with
+    exactly: finish[<answer>]
+
+hooks:
+  - type: "AuditLog"
+    level: "info"
+
+reproduction:
+  tools: []   # harness disables the tool registry for this arm

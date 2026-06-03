@@ -1,0 +1,50 @@
+# Reproduction: Plan-and-Solve Prompting (Wang et al., ACL 2023)
+# Paper: "Plan-and-Solve Prompting: Improving Zero-Shot Chain-of-Thought
+#         Reasoning by Large Language Models" (arXiv:2305.04091)
+# Benchmark: GSM8K, SVAMP, AQuA (math word problems)
+#
+# Reproduction thesis: Plan-and-Solve first devises a plan ("understand the
+# problem, extract variables, plan steps"), then executes it, reducing
+# calculation and missing-step errors vs. plain Zero-shot-CoT. In agent-workbench
+# this is the `plan_and_solve` strategy. Compared against react_hotpotqa-style
+# direct reasoning on the SAME model, this isolates the planning phase.
+#
+# Controlled variable: strategy.type = plan_and_solve
+
+agent:
+  name: "PlanAndSolve-GSM8K"
+  model: "qwen-max"
+  context_window: 32000
+  max_tokens: 1024
+  enable_streaming: false
+
+plugins:
+  memory: "NoOpMemory"
+  context: "WorkspaceRootManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 0
+  compaction_tiers:
+    micro_percent: 55
+    auto_percent: 75
+    full_percent: 92
+  max_tool_result_tokens: 2000
+
+strategy:
+  type: "plan_and_solve"
+  system_prompt_template: |
+    Let's first understand the problem and devise a plan to solve it.
+    Then, let's carry out the plan and solve the problem step by step.
+    Plan:
+      1. Extract the relevant variables and their values.
+      2. Identify the quantities to compute and the order of operations.
+      3. Execute each calculation, carrying intermediate results forward.
+    Finally, output: "The answer is <number>."
+
+hooks:
+  - type: "PlanTracker"
+    enabled: true
+  - type: "AuditLog"
+    level: "info"

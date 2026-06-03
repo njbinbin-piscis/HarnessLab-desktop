@@ -1,0 +1,57 @@
+# Reproduction: Reflexion (Shinn et al., NeurIPS 2023)
+# Paper: "Reflexion: Language Agents with Verbal Reinforcement Learning"
+#        (arXiv:2303.11366)
+# Benchmark: ALFWorld (decision making), HotpotQA (reasoning), HumanEval (coding)
+#
+# Reproduction thesis: Reflexion augments a ReAct/Act agent with an episodic
+# memory of *verbal self-reflections* generated after failed trials. On retry,
+# the reflections are injected into context, improving success over trials.
+#
+# In agent-workbench this is expressed as:
+#   strategy.type = react        (base actor)
+#   plugins.memory = InMemoryVectorStore   (episodic reflection store)
+#   hooks: ReflectionJournal      (writes a self-reflection on failure)
+# The benchmark harness drives multiple trials per task and feeds prior
+# reflections back in, measuring the success@trial curve from the paper.
+#
+# Controlled variable: plugins.memory (NoOpMemory vs InMemoryVectorStore)
+#                      and the reflection hook — isolates the memory mechanism.
+
+agent:
+  name: "Reflexion-ALFWorld"
+  model: "qwen-max"
+  context_window: 32000
+  max_tokens: 1024
+  enable_streaming: false
+
+plugins:
+  memory: "InMemoryVectorStore"   # episodic memory of verbal reflections
+  context: "WorkspaceRootManager"
+
+policy:
+  confirm_shell: false
+  confirm_file_write: false
+  auto_compact_threshold: 0
+  max_tool_result_tokens: 2000
+
+strategy:
+  type: "react"
+  system_prompt_template: |
+    You are an agent acting in an environment. Use ReAct (Thought/Action/Observation).
+    If memory contains reflections from previous failed attempts at this task,
+    read them first and avoid repeating the same mistakes.
+    Finish with: Action: finish[<result>]
+
+hooks:
+  - type: "FileJournal"
+    path: ".pisci/reflexion_journal.jsonl"
+    enabled: true
+  - type: "AuditLog"
+    level: "info"
+
+# Reproduction control knobs consumed by the benchmark harness (not the kernel):
+reproduction:
+  paper: "Reflexion (Shinn et al., 2023)"
+  trials_per_task: 5            # success@k curve over up to 5 reflective retries
+  reflect_on_failure: true
+  ablation_pair: "reflexion_noop_alfworld.yaml"   # memory=NoOpMemory control arm

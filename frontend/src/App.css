@@ -36,11 +36,61 @@ body {
   gap: 2rem;
 }
 
+.app-main-full {
+  display: block;
+}
+
+.app-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.app-tabs .tab {
+  background: #1a1d29;
+  color: rgba(255, 255, 255, 0.7);
+  border: 1px solid #2c3142;
+  border-radius: 8px;
+  padding: 0.5rem 1.25rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.app-tabs .tab.active {
+  background: #2d5fff;
+  color: #fff;
+  border-color: #2d5fff;
+}
+
 .editor-section, .monitor-section {
   background: #1a1a1a;
   padding: 1.5rem;
   border-radius: 8px;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.validation-hint {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #888;
+}
+
+.config-editor .validation-status {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.config-editor .validation-status.valid {
+  background: rgba(46, 160, 67, 0.15);
+  border: 1px solid rgba(46, 160, 67, 0.4);
+}
+
+.config-editor .validation-status.invalid {
+  background: rgba(248, 81, 73, 0.15);
+  border: 1px solid rgba(248, 81, 73, 0.4);
 }
 
 .config-editor textarea {
@@ -53,6 +103,19 @@ body {
   padding: 1rem;
   font-family: 'Fira Code', monospace;
   resize: vertical;
+}
+
+.prompt-input {
+  width: 100%;
+  margin-top: 1rem;
+  background: #0f0f0f;
+  color: #e0e0e0;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 0.75rem;
+  font-family: inherit;
+  resize: vertical;
+  box-sizing: border-box;
 }
 
 .run-button {
