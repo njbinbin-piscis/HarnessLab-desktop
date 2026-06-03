@@ -1,11 +1,11 @@
 mod config_loader;
 
-use std::path::PathBuf;
-use piscis_kernel::agent::tool::ToolRegistry;
-use piscis_kernel::policy::PolicyGate;
-use std::sync::Arc;
 use agent_workbench::config::AgentConfig as KernelAgentConfig;
 use agent_workbench::loader::build_harness_config;
+use piscis_kernel::agent::tool::ToolRegistry;
+use piscis_kernel::policy::PolicyGate;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Validates that the YAML configuration is correctly parsed and mapped to the kernel's HarnessConfig.
 pub fn validate_config_mapping(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -70,22 +70,29 @@ mod tests {
 
     #[test]
     fn test_react_config_validation() {
-        validate_config_mapping("configs/react_agent.yaml").expect("ReAct config validation failed");
+        validate_config_mapping("configs/react_agent.yaml")
+            .expect("ReAct config validation failed");
     }
 
     #[test]
     fn test_plan_and_solve_config_validation() {
-        validate_config_mapping("configs/plan_and_solve_agent.yaml").expect("Plan-and-Solve config validation failed");
+        validate_config_mapping("configs/plan_and_solve_agent.yaml")
+            .expect("Plan-and-Solve config validation failed");
     }
 
     #[test]
     fn test_strategy_differentiation() {
-        let react_config = KernelAgentConfig::from_file(PathBuf::from("configs/react_agent.yaml").as_path()).unwrap();
-        let pas_config = KernelAgentConfig::from_file(PathBuf::from("configs/plan_and_solve_agent.yaml").as_path()).unwrap();
+        let react_config =
+            KernelAgentConfig::from_file(PathBuf::from("configs/react_agent.yaml").as_path())
+                .unwrap();
+        let pas_config = KernelAgentConfig::from_file(
+            PathBuf::from("configs/plan_and_solve_agent.yaml").as_path(),
+        )
+        .unwrap();
 
         // Verify that the agents have different names and potentially different policy settings
         assert_ne!(react_config.agent.name, pas_config.agent.name);
-        
+
         // In a real scenario, we might check if the system prompt templates differ
         // or if specific hooks (like PlanTracker) are present in one but not the other.
         println!("ReAct Agent: {}", react_config.agent.name);

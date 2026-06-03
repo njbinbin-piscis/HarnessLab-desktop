@@ -2,8 +2,8 @@
 //!
 //! Defines traits for core extensible components: ContextManager, Memory, and Hooks.
 
-use std::path::{Path, PathBuf};
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 /// A discovered context entry from the project workspace.
 #[derive(Debug, Clone)]
@@ -17,7 +17,7 @@ pub struct ContextEntry {
 pub trait ContextManager: Send + Sync {
     /// Discover and load context from the given root directory.
     fn discover(&self, root: &Path) -> Result<Vec<ContextEntry>>;
-    
+
     /// Render discovered context into a prompt-ready string.
     fn render(&self, entries: &[ContextEntry]) -> String;
 }
@@ -26,10 +26,10 @@ pub trait ContextManager: Send + Sync {
 pub trait Memory: Send + Sync {
     /// Add a message or observation to memory.
     fn add(&mut self, content: &str);
-    
+
     /// Retrieve relevant memories based on a query.
     fn retrieve(&self, query: &str, limit: usize) -> Vec<String>;
-    
+
     /// Clear all memory.
     fn clear(&mut self);
 }
@@ -38,10 +38,10 @@ pub trait Memory: Send + Sync {
 pub trait Hook: Send + Sync {
     /// Called before a tool is executed.
     fn before_tool(&self, tool_name: &str, args: &serde_json::Value) -> Result<()>;
-    
+
     /// Called after a tool is executed.
     fn after_tool(&self, tool_name: &str, result: &serde_json::Value) -> Result<()>;
-    
+
     /// Called during prompt assembly.
     fn on_prompt_assemble(&self, prompt: &mut String) -> Result<()>;
 }

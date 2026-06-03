@@ -148,7 +148,10 @@ fn build(args: &Args) -> Result<(), String> {
         .map_err(|e| format!("failed to build harness: {e}"))?;
 
     if args.command == "validate" {
-        println!("OK: '{config_path}' is valid (agent='{}')", config.agent.name);
+        println!(
+            "OK: '{config_path}' is valid (agent='{}')",
+            config.agent.name
+        );
         return Ok(());
     }
 
@@ -244,7 +247,9 @@ fn exec(args: &Args) -> Result<(), String> {
                 .to_string(),
         );
     }
-    let base_url = std::env::var("PISCIS_BASE_URL").ok().filter(|s| !s.is_empty());
+    let base_url = std::env::var("PISCIS_BASE_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     // Register the kernel's neutral tools (file/shell/search/etc.). DB-backed
     // tools (memory_store, recall_tool_result) stay disabled in this MVP since

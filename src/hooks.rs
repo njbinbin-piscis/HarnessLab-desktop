@@ -2,17 +2,15 @@
 //!
 //! Tracks performance metrics and triggers configuration refinement proposals.
 
-use std::path::{Path, PathBuf};
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use serde::{Serialize, Deserialize};
-use anyhow::Result;
 
 use async_trait::async_trait;
-use piscis_kernel::agent::hooks::{
-    AgentHooks, ContextHookEvent, HookDecision, ToolHookEvent,
-};
+use piscis_kernel::agent::hooks::{AgentHooks, ContextHookEvent, HookDecision, ToolHookEvent};
 use piscis_kernel::agent::tool::ToolResult;
 
 /// Performance metrics tracked by the evolution hook.
@@ -78,21 +76,24 @@ impl EvolutionHook {
         }
 
         self.turn_counter += 1;
-        
+
         // Append to JSONL log
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.log_path)?;
-        
+
         let line = serde_json::to_string(&metrics)?;
         writeln!(file, "{}", line)?;
-        
+
         // Check thresholds
         if metrics.user_correction_rate > self.policy.threshold.user_correction_rate {
             // In a real system, this would trigger a notification or a tool call
             // For now, we just log it.
-            eprintln!("Evolution Trigger: High correction rate detected ({})", metrics.user_correction_rate);
+            eprintln!(
+                "Evolution Trigger: High correction rate detected ({})",
+                metrics.user_correction_rate
+            );
         }
 
         Ok(())
@@ -103,7 +104,7 @@ impl EvolutionHook {
         if !self.policy.enabled {
             return None;
         }
-        
+
         // Stub: In a real implementation, this would analyze the log
         // and suggest specific YAML changes (e.g., refining system_prompt).
         Some("# Proposed Config Update\n# Refine system_prompt to be more concise\n".to_string())
@@ -220,11 +221,17 @@ impl AgentHooks for WorkbenchHooks {
             ContextHookEvent::TurnEnd { session_id } => {
                 eprintln!("[workbench:audit] turn_end session={}", session_id)
             }
-            ContextHookEvent::BeforeCompact { session_id, message_count } => eprintln!(
+            ContextHookEvent::BeforeCompact {
+                session_id,
+                message_count,
+            } => eprintln!(
                 "[workbench:audit] before_compact session={} messages={}",
                 session_id, message_count
             ),
-            ContextHookEvent::AfterCompact { session_id, message_count } => eprintln!(
+            ContextHookEvent::AfterCompact {
+                session_id,
+                message_count,
+            } => eprintln!(
                 "[workbench:audit] after_compact session={} messages={}",
                 session_id, message_count
             ),
@@ -295,7 +302,7 @@ mod tests {
 
         hook.record_turn(metrics).unwrap();
         assert!(hook.log_path.exists());
-        
+
         let content = std::fs::read_to_string(&hook.log_path).unwrap();
         assert!(content.contains("\"turn_id\":1"));
     }

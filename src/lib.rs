@@ -5,11 +5,11 @@
 //! configuration files.
 
 pub mod config;
+pub mod context_managers;
+pub mod contrib;
+pub mod hooks;
 pub mod loader;
 pub mod plugins;
-pub mod context_managers;
-pub mod hooks;
-pub mod contrib;
 
 pub use config::*;
 pub use loader::*;

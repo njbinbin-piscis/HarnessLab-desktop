@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use piscis_kernel::agent::harness::{HarnessConfig, LayeredPrompt};
 use piscis_kernel::agent::harness::config::{CompactionSettings, ConfirmFlags};
+use piscis_kernel::agent::harness::{HarnessConfig, LayeredPrompt};
 use piscis_kernel::agent::loop_::resolve_compaction_strategy;
 use piscis_kernel::agent::loop_strategy::resolve_loop_strategy;
 use piscis_kernel::agent::tool::ToolRegistry;
@@ -108,8 +108,8 @@ pub fn build_harness_config(
     let memory_plugin = resolve_memory_plugin(&plugins.memory)?;
 
     // Resolve the loop-control strategy from `strategy.type`.
-    let loop_strategy = resolve_loop_strategy(&agent_config.strategy.strategy_type)
-        .ok_or_else(|| {
+    let loop_strategy =
+        resolve_loop_strategy(&agent_config.strategy.strategy_type).ok_or_else(|| {
             ConfigLoadError::UnknownLoopStrategy(agent_config.strategy.strategy_type.clone())
         })?;
 
@@ -198,9 +198,7 @@ pub fn build_workbench_hooks(
 ///
 /// Unknown identifiers return [`ConfigLoadError::UnknownContextManager`] so
 /// configuration typos fail loudly rather than silently degrading behavior.
-pub fn resolve_context_manager(
-    name: &str,
-) -> Result<Box<dyn ContextManager>, ConfigLoadError> {
+pub fn resolve_context_manager(name: &str) -> Result<Box<dyn ContextManager>, ConfigLoadError> {
     match name {
         "ProjectContextManager" => Ok(Box::new(ProjectContextManager)),
         "WorkspaceRootManager" => Ok(Box::new(WorkspaceRootManager)),
@@ -226,9 +224,7 @@ pub fn resolve_kernel_context_manager(
 /// `InMemoryVectorStore` / `SqliteMemory` resolve to a concrete store.
 /// `SqliteMemory` currently falls back to the in-memory store (persistent
 /// backend WIP). Unknown identifiers fail loudly.
-pub fn resolve_memory_plugin(
-    name: &str,
-) -> Result<Option<Arc<dyn MemoryPlugin>>, ConfigLoadError> {
+pub fn resolve_memory_plugin(name: &str) -> Result<Option<Arc<dyn MemoryPlugin>>, ConfigLoadError> {
     match name {
         "NoOpMemory" => Ok(None),
         "InMemoryVectorStore" => Ok(Some(Arc::new(InMemoryVectorStore::new()))),
@@ -346,7 +342,9 @@ plugins:
         // NoOpMemory => no plugin wired (behaviour-preserving default path).
         assert!(resolve_memory_plugin("NoOpMemory").unwrap().is_none());
         // Concrete stores resolve to Some.
-        assert!(resolve_memory_plugin("InMemoryVectorStore").unwrap().is_some());
+        assert!(resolve_memory_plugin("InMemoryVectorStore")
+            .unwrap()
+            .is_some());
         assert!(resolve_memory_plugin("SqliteMemory").unwrap().is_some());
         // Unknown identifiers fail loudly.
         assert!(matches!(
@@ -391,7 +389,10 @@ plugins:
         let (reg, policy) = test_scaffolding();
         let harness =
             build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp"))).unwrap();
-        assert!(harness.memory_plugin.is_some(), "memory plugin should be wired");
+        assert!(
+            harness.memory_plugin.is_some(),
+            "memory plugin should be wired"
+        );
         assert_eq!(
             harness.memory_retrieval_prompt.as_deref(),
             Some("## Recall\n{memories}")
@@ -414,14 +415,15 @@ plugins:
             ("plan_and_solve", "plan_and_solve"),
             ("reflexion", "reflexion"),
         ] {
-            let yaml = format!(
-                "agent:\n  name: \"S\"\n  model: \"m\"\nstrategy:\n  type: \"{ty}\"\n"
-            );
+            let yaml =
+                format!("agent:\n  name: \"S\"\n  model: \"m\"\nstrategy:\n  type: \"{ty}\"\n");
             let config = AgentConfig::from_yaml(&yaml).unwrap();
             let (reg, policy) = test_scaffolding();
             let harness =
                 build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp"))).unwrap();
-            let strat = harness.loop_strategy.expect("loop strategy should be wired");
+            let strat = harness
+                .loop_strategy
+                .expect("loop strategy should be wired");
             assert_eq!(strat.name(), expected);
         }
     }
@@ -432,7 +434,10 @@ plugins:
         let config = AgentConfig::from_yaml(yaml).unwrap();
         let (reg, policy) = test_scaffolding();
         let result = build_harness_config(&config, reg, policy, Some(&PathBuf::from("/tmp")));
-        assert!(matches!(result, Err(ConfigLoadError::UnknownLoopStrategy(_))));
+        assert!(matches!(
+            result,
+            Err(ConfigLoadError::UnknownLoopStrategy(_))
+        ));
     }
 
     #[test]
@@ -464,18 +469,21 @@ strategy:
 "#;
         let config = AgentConfig::from_yaml(yaml).unwrap();
         let (reg, policy) = test_scaffolding();
-        let harness =
-            build_harness_config(&config, reg, policy, Some(dir.path())).unwrap();
+        let harness = build_harness_config(&config, reg, policy, Some(dir.path())).unwrap();
 
         // The strategy prompt stays in the layered prompt; project context is
         // now rendered at run time via the wired context-manager slot.
         let prompt = harness.layered_prompt.render();
-        assert!(prompt.contains("STRATEGY_PROMPT_MARKER"), "strategy prompt should remain");
-        assert!(!prompt.contains("PROJECT_RULE_MARKER"), "context is no longer folded into the prompt");
+        assert!(
+            prompt.contains("STRATEGY_PROMPT_MARKER"),
+            "strategy prompt should remain"
+        );
+        assert!(
+            !prompt.contains("PROJECT_RULE_MARKER"),
+            "context is no longer folded into the prompt"
+        );
 
-        let rendered_ctx = harness
-            .render_project_context(dir.path(), 8_000)
-            .unwrap();
+        let rendered_ctx = harness.render_project_context(dir.path(), 8_000).unwrap();
         assert!(
             rendered_ctx.contains("PROJECT_RULE_MARKER"),
             "context should be discoverable via the context-manager slot"
@@ -498,7 +506,10 @@ hooks:
         let (reg, policy) = test_scaffolding();
         let dir = tempfile::TempDir::new().unwrap();
         let harness = build_harness_config(&config, reg, policy, Some(dir.path())).unwrap();
-        assert!(harness.hooks.is_some(), "hooks should be wired into harness");
+        assert!(
+            harness.hooks.is_some(),
+            "hooks should be wired into harness"
+        );
 
         // No hooks configured => no adapter attached.
         let bare = AgentConfig::from_yaml("agent:\n  name: \"Bare\"\n  model: \"m\"\n").unwrap();

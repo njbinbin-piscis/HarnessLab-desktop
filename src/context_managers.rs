@@ -1,9 +1,9 @@
 //! Context Manager implementations for Agent Workbench.
 
-use crate::plugins::{ContextManager, ContextEntry};
-use std::path::Path;
-use anyhow::{Result, Context};
+use crate::plugins::{ContextEntry, ContextManager};
+use anyhow::{Context, Result};
 use glob::glob;
+use std::path::Path;
 
 /// Adapter that exposes a workbench [`ContextManager`] through the kernel's
 /// [`piscis_kernel::context::ContextManager`] trait so it can be wired into the
@@ -110,8 +110,9 @@ impl ContextManager for ProjectContextManager {
 
         let mut rendered = String::from("# Project Context\n\n");
         for entry in entries {
-            rendered.push_str(&format!("## {}\n\n{}\n\n---\n\n", 
-                entry.path.display(), 
+            rendered.push_str(&format!(
+                "## {}\n\n{}\n\n---\n\n",
+                entry.path.display(),
                 entry.content
             ));
         }
@@ -160,8 +161,9 @@ impl ContextManager for WorkspaceRootManager {
 
         let mut rendered = String::from("# Workspace Context\n\n");
         for entry in entries {
-            rendered.push_str(&format!("## {}\n\n{}\n\n---\n\n", 
-                entry.path.display(), 
+            rendered.push_str(&format!(
+                "## {}\n\n{}\n\n---\n\n",
+                entry.path.display(),
                 entry.content
             ));
         }
@@ -181,13 +183,15 @@ impl ContextManager for DynamicContextManager {
 
     fn render(&self, entries: &[ContextEntry]) -> String {
         if entries.is_empty() {
-            return "# Dynamic Context\n\nNo relevant context found via semantic search.\n".to_string();
+            return "# Dynamic Context\n\nNo relevant context found via semantic search.\n"
+                .to_string();
         }
-        
+
         let mut rendered = String::from("# Dynamic Context\n\n");
         for entry in entries {
-            rendered.push_str(&format!("## {}\n\n{}\n\n---\n\n", 
-                entry.path.display(), 
+            rendered.push_str(&format!(
+                "## {}\n\n{}\n\n---\n\n",
+                entry.path.display(),
                 entry.content
             ));
         }
@@ -198,8 +202,8 @@ impl ContextManager for DynamicContextManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -209,22 +213,26 @@ mod tests {
 
         // Create PISCI.md
         fs::write(root.join("PISCI.md"), "Project Rules").unwrap();
-        
+
         // Create .pisci/rules.md
         fs::create_dir_all(root.join(".pisci")).unwrap();
         fs::write(root.join(".pisci").join("rules.md"), "Detailed Rules").unwrap();
 
         // Create kb/architecture/design.md
         fs::create_dir_all(root.join("kb").join("architecture")).unwrap();
-        fs::write(root.join("kb").join("architecture").join("design.md"), "Design Doc").unwrap();
+        fs::write(
+            root.join("kb").join("architecture").join("design.md"),
+            "Design Doc",
+        )
+        .unwrap();
 
         let manager = ProjectContextManager;
         let entries = manager.discover(root).unwrap();
 
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].priority, 100); // PISCI.md
-        assert_eq!(entries[1].priority, 90);  // rules.md
-        assert_eq!(entries[2].priority, 80);  // design.md
+        assert_eq!(entries[1].priority, 90); // rules.md
+        assert_eq!(entries[2].priority, 80); // design.md
     }
 
     #[test]
@@ -240,18 +248,16 @@ mod tests {
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].priority, 100); // PISCI.md
-        assert_eq!(entries[1].priority, 50);  // README.md
+        assert_eq!(entries[1].priority, 50); // README.md
     }
 
     #[test]
     fn test_rendering() {
-        let entries = vec![
-            ContextEntry {
-                path: PathBuf::from("test.md"),
-                content: "Test Content".to_string(),
-                priority: 10,
-            }
-        ];
+        let entries = vec![ContextEntry {
+            path: PathBuf::from("test.md"),
+            content: "Test Content".to_string(),
+            priority: 10,
+        }];
 
         let manager = ProjectContextManager;
         let rendered = manager.render(&entries);

@@ -10,7 +10,9 @@ use std::sync::Arc;
 /// benchmark validates the same `HarnessConfig` construction path used in
 /// production. A full LLM loop (`into_agent_loop`) still requires a live
 /// `LlmClient`, so strategy validation inspects the assembled system prompt.
-pub async fn run_benchmark(config_path: &str) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
+pub async fn run_benchmark(
+    config_path: &str,
+) -> Result<BenchmarkResult, Box<dyn std::error::Error>> {
     // 1. Build a real HarnessConfig through the library loader.
     let config = AgentConfig::from_file(std::path::Path::new(config_path))?;
     let registry = Arc::new(ToolRegistry::new());
@@ -53,14 +55,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_react_benchmark() {
-        let result = run_benchmark("configs/react_agent.yaml").await.expect("Benchmark failed");
+        let result = run_benchmark("configs/react_agent.yaml")
+            .await
+            .expect("Benchmark failed");
         assert_eq!(result.strategy, "react");
         assert!(result.strategy_valid);
     }
 
     #[tokio::test]
     async fn test_plan_and_solve_benchmark() {
-        let result = run_benchmark("configs/plan_and_solve_agent.yaml").await.expect("Benchmark failed");
+        let result = run_benchmark("configs/plan_and_solve_agent.yaml")
+            .await
+            .expect("Benchmark failed");
         assert_eq!(result.strategy, "plan_and_solve");
         assert!(result.strategy_valid);
     }

@@ -8,10 +8,12 @@ use std::fs;
 use tempfile::TempDir;
 
 // Import from the workbench crate
-use agent_workbench::context_managers::{ProjectContextManager, WorkspaceRootManager, DynamicContextManager};
-use agent_workbench::plugins::ContextManager;
-use agent_workbench::hooks::{EvolutionHook, EvolutionPolicy, EvolutionMetrics};
 use agent_workbench::config::AgentConfig;
+use agent_workbench::context_managers::{
+    DynamicContextManager, ProjectContextManager, WorkspaceRootManager,
+};
+use agent_workbench::hooks::{EvolutionHook, EvolutionMetrics, EvolutionPolicy};
+use agent_workbench::plugins::ContextManager;
 
 /// Validates that ProjectContextManager correctly discovers and prioritizes context files.
 #[test]
@@ -21,23 +23,36 @@ fn test_project_context_manager_discovery() {
 
     // Create PISCI.md (Priority 100)
     fs::write(root.join("PISCI.md"), "Project Rules").unwrap();
-    
+
     // Create .pisci/rules.md (Priority 90)
     fs::create_dir_all(root.join(".pisci")).unwrap();
     fs::write(root.join(".pisci").join("rules.md"), "Detailed Rules").unwrap();
 
     // Create kb/architecture/design.md (Priority 80)
     fs::create_dir_all(root.join("kb").join("architecture")).unwrap();
-    fs::write(root.join("kb").join("architecture").join("design.md"), "Design Doc").unwrap();
+    fs::write(
+        root.join("kb").join("architecture").join("design.md"),
+        "Design Doc",
+    )
+    .unwrap();
 
     let manager = ProjectContextManager;
     let entries = manager.discover(root).unwrap();
 
     assert_eq!(entries.len(), 3, "Should discover 3 context files");
-    assert_eq!(entries[0].priority, 100, "PISCI.md should have highest priority");
-    assert_eq!(entries[1].priority, 90, "rules.md should have second highest priority");
-    assert_eq!(entries[2].priority, 80, "design.md should have third highest priority");
-    
+    assert_eq!(
+        entries[0].priority, 100,
+        "PISCI.md should have highest priority"
+    );
+    assert_eq!(
+        entries[1].priority, 90,
+        "rules.md should have second highest priority"
+    );
+    assert_eq!(
+        entries[2].priority, 80,
+        "design.md should have third highest priority"
+    );
+
     println!("✅ ProjectContextManager discovery validated");
 }
 
@@ -49,18 +64,26 @@ fn test_workspace_root_manager_shallow_scan() {
 
     fs::write(root.join("README.md"), "Readme Content").unwrap();
     fs::write(root.join("PISCI.md"), "Pisci Content").unwrap();
-    
+
     // Create a nested file that should be IGNORED by WorkspaceRootManager
     fs::create_dir_all(root.join("kb").join("architecture")).unwrap();
-    fs::write(root.join("kb").join("architecture").join("deep.md"), "Deep Doc").unwrap();
+    fs::write(
+        root.join("kb").join("architecture").join("deep.md"),
+        "Deep Doc",
+    )
+    .unwrap();
 
     let manager = WorkspaceRootManager;
     let entries = manager.discover(root).unwrap();
 
-    assert_eq!(entries.len(), 2, "WorkspaceRootManager should only find root files");
+    assert_eq!(
+        entries.len(),
+        2,
+        "WorkspaceRootManager should only find root files"
+    );
     assert_eq!(entries[0].priority, 100); // PISCI.md
-    assert_eq!(entries[1].priority, 50);  // README.md
-    
+    assert_eq!(entries[1].priority, 50); // README.md
+
     // Ensure deep file is not included
     for entry in &entries {
         assert!(!entry.path.to_string_lossy().contains("deep.md"));
@@ -80,7 +103,7 @@ fn test_dynamic_context_manager_stub() {
 
     // Stub implementation returns empty
     assert_eq!(entries.len(), 0);
-    
+
     let rendered = manager.render(&entries);
     assert!(rendered.contains("No relevant context found"));
 
@@ -124,10 +147,16 @@ fn test_evolution_hook_logging() {
 
     test_hook.hook.record_turn(metrics.clone()).unwrap();
     assert!(test_hook.log_path.exists(), "Log file should be created");
-    
+
     let content = fs::read_to_string(&test_hook.log_path).unwrap();
-    assert!(content.contains("\"turn_id\":1"), "Log should contain turn_id");
-    assert!(content.contains("\"tool_call_count\":5"), "Log should contain tool_call_count");
+    assert!(
+        content.contains("\"turn_id\":1"),
+        "Log should contain turn_id"
+    );
+    assert!(
+        content.contains("\"tool_call_count\":5"),
+        "Log should contain tool_call_count"
+    );
 
     println!("✅ EvolutionHook logging validated");
 }
@@ -153,7 +182,10 @@ fn test_evolution_hook_disabled() {
 
     test_hook.hook.record_turn(metrics).unwrap();
     // Should not create log file if disabled
-    assert!(!test_hook.log_path.exists(), "Log file should NOT be created when disabled");
+    assert!(
+        !test_hook.log_path.exists(),
+        "Log file should NOT be created when disabled"
+    );
 
     println!("✅ EvolutionHook disabled state validated");
 }
@@ -210,7 +242,7 @@ fn test_evolution_trigger_threshold() {
 
     // This should trigger an eprintln! in the current implementation
     test_hook.hook.record_turn(metrics_high_correction).unwrap();
-    
+
     // Verify log was still written
     let content = fs::read_to_string(&test_hook.log_path).unwrap();
     assert!(content.contains("\"user_correction_rate\":0.3"));
