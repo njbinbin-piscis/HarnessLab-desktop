@@ -2224,8 +2224,8 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "piscis-core"
-version = "0.8.38"
-source = "git+https://github.com/njbinbin-piscis/piscis-engine.git?rev=v0.8.38#4e79d27db9498ef5aec31e5064f079239682f823"
+version = "0.8.42"
+source = "git+https://github.com/njbinbin-piscis/piscis-engine.git?rev=v0.8.42#a164e52f06fc09eb3d88d7636551ff321288c7ab"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2236,8 +2236,8 @@ dependencies = [
 
 [[package]]
 name = "piscis-kernel"
-version = "0.8.38"
-source = "git+https://github.com/njbinbin-piscis/piscis-engine.git?rev=v0.8.38#4e79d27db9498ef5aec31e5064f079239682f823"
+version = "0.8.42"
+source = "git+https://github.com/njbinbin-piscis/piscis-engine.git?rev=v0.8.42#a164e52f06fc09eb3d88d7636551ff321288c7ab"
 dependencies = [
  "anyhow",
  "async-trait",
