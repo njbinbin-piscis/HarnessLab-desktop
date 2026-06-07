@@ -39,8 +39,14 @@ read-only canvas wired over IPC (P1); and a transactional **Edit-Ops engine**
 (`ops.rs`: validate/diff/apply, all-or-nothing) backed by a bundled-SQLite store
 (`rusqlite`) that persists projects + canvas layout, with an `apply_ops` command
 doing `base_rev` optimistic-concurrency and 422/409/404 error payloads — the
-canvas is now bidirectionally editable (P2). Subsequent phases (P3–P6) add the run
-console, factory codegen, the AI copilot and the market. See the roadmap in
+canvas is now bidirectionally editable (P2); and a live **run console** (P3) that
+executes the project's primary agent over `piscis-kernel`, maps the visual
+`AgentSpec` to a harness config, streams translated engine events to the canvas
+over a Tauri **IPC channel** (lighting up nodes + overlaying per-agent metrics),
+and persists each run to a `canvas_runs` history + session tree. Credentials come
+from the environment (`PISCIS_API_KEY` / `PISCIS_PROVIDER` / `PISCIS_BASE_URL`);
+multi-agent coordination is the remaining P3 sub-item. Subsequent phases (P4–P6)
+add factory codegen, the AI copilot and the market. See the roadmap in
 `docs/desktop-rewrite-plan.md`.
 
 ## Develop

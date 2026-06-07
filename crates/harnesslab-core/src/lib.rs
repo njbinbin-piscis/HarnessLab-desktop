@@ -20,6 +20,7 @@ pub mod ops;
 pub mod plugins;
 pub mod project;
 pub mod registry;
+pub mod runner;
 pub mod store;
 
 pub use config::*;

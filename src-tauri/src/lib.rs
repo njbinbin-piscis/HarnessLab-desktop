@@ -46,6 +46,9 @@ pub fn run() {
             commands::get_layout,
             commands::save_layout,
             commands::apply_ops,
+            commands::run_project,
+            commands::list_canvas_runs,
+            commands::session_tree,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HarnessLab Desktop");

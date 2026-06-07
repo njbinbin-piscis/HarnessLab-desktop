@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::ops::{apply_ops as ops_apply_ops, diff_projects};
 use crate::project::{new_id, now_secs, AgentSpec, ComponentRef, Project, Topology};
 use crate::registry;
+use crate::runner::NodeMetrics;
 
 /// A node position on the canvas.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -52,6 +53,47 @@ pub struct OpsResult {
     pub applied: usize,
     pub dry_run: bool,
     pub rev: u64,
+}
+
+/// A single-shot run launched from the canvas, persisted for the run console
+/// and the session tree. Matches the TS `CanvasRun`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanvasRun {
+    pub id: String,
+    pub project_id: String,
+    #[serde(default)]
+    pub project_rev: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    pub task: String,
+    pub result: String,
+    pub created_at: f64,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub total_tokens: u32,
+    #[serde(default)]
+    pub metrics: BTreeMap<String, NodeMetrics>,
+}
+
+/// A node in the branching session tree (a run, for now).
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionNode {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub parent: Option<String>,
+    pub task: String,
+    pub result: String,
+    pub created_at: f64,
+    pub total_tokens: u32,
+}
+
+/// The session tree payload (matches the TS `sessionTree` response).
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionTree {
+    pub nodes: Vec<SessionNode>,
+    pub roots: Vec<String>,
 }
 
 /// Why an `apply_ops` call could not be persisted.
@@ -96,7 +138,15 @@ impl Store {
              CREATE TABLE IF NOT EXISTS layouts (
                  project_id TEXT PRIMARY KEY,
                  data       TEXT NOT NULL
-             );",
+             );
+             CREATE TABLE IF NOT EXISTS canvas_runs (
+                 id         TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL,
+                 created_at REAL NOT NULL,
+                 data       TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_runs_project
+                 ON canvas_runs (project_id, created_at DESC);",
         )
     }
 
@@ -201,6 +251,79 @@ impl Store {
             rusqlite::params![id, data],
         );
         layout
+    }
+
+    // ── Canvas runs / session tree (P3) ─────────────────────────────────────
+
+    pub fn save_canvas_run(&self, run: &CanvasRun) {
+        let data = serde_json::to_string(run).expect("serialize run");
+        let _ = self.conn.execute(
+            "INSERT INTO canvas_runs (id, project_id, created_at, data) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET data = ?4",
+            rusqlite::params![run.id, run.project_id, run.created_at, data],
+        );
+    }
+
+    pub fn list_canvas_runs(&self, project_id: &str, limit: u32) -> Vec<CanvasRun> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT data FROM canvas_runs WHERE project_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map(rusqlite::params![project_id, limit], |r| {
+            r.get::<_, String>(0)
+        })
+        .map(|it| {
+            it.filter_map(Result::ok)
+                .filter_map(|d| serde_json::from_str(&d).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    pub fn get_canvas_run(&self, run_id: &str) -> Option<CanvasRun> {
+        let data: Option<String> = self
+            .conn
+            .query_row("SELECT data FROM canvas_runs WHERE id = ?1", [run_id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten();
+        data.and_then(|d| serde_json::from_str(&d).ok())
+    }
+
+    /// Build the branching session tree from a project's runs (newest first).
+    pub fn session_tree(&self, project_id: &str, limit: u32) -> SessionTree {
+        let runs = self.list_canvas_runs(project_id, limit);
+        let run_ids: std::collections::BTreeSet<String> =
+            runs.iter().map(|r| r.id.clone()).collect();
+        let nodes: Vec<SessionNode> = runs
+            .iter()
+            .map(|r| {
+                let parent = r
+                    .parent
+                    .as_ref()
+                    .filter(|p| run_ids.contains(*p))
+                    .cloned();
+                SessionNode {
+                    id: r.id.clone(),
+                    kind: "run".to_string(),
+                    parent,
+                    task: r.task.clone(),
+                    result: r.result.chars().take(200).collect(),
+                    created_at: r.created_at,
+                    total_tokens: r.total_tokens,
+                }
+            })
+            .collect();
+        let roots = nodes
+            .iter()
+            .filter(|n| n.parent.is_none())
+            .map(|n| n.id.clone())
+            .collect();
+        SessionTree { nodes, roots }
     }
 
     /// Validate + apply structured edit ops transactionally (all-or-nothing).

@@ -4,14 +4,20 @@
 //! land in later phases.
 
 use std::collections::BTreeMap;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
-use harnesslab_core::project::Project;
+use harnesslab_core::project::{new_id, now_secs, Project};
 use harnesslab_core::registry::{self, ComponentReference, ComponentSpec, ToolSpec};
-use harnesslab_core::store::{Layout, OpsError, OpsResult, ProjectSummary, Store};
+use harnesslab_core::runner::{self, LlmCreds, NodeMetrics, UiEvent};
+use harnesslab_core::store::{
+    CanvasRun, Layout, OpsError, OpsResult, ProjectSummary, SessionTree, Store,
+};
 use serde::Serialize;
 use serde_json::Value;
-use tauri::State;
+use tauri::ipc::Channel;
+use tauri::{Manager, State};
+use tokio::sync::mpsc;
 
 /// Shared application state: the SQLite-backed project/layout store behind a mutex.
 pub struct AppState {
@@ -179,6 +185,136 @@ pub fn apply_ops(
                 project: None,
             },
         })
+}
+
+// ── Run console / live execution (P3) ────────────────────────────────────────
+
+/// Streaming messages pushed to the frontend over a Tauri IPC channel during a
+/// run. Mirrors the web SSE envelope (`{type:"event"|"result"|"error", …}`).
+#[derive(Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RunMsg {
+    Event { event: UiEvent },
+    Result { result: String, run: CanvasRun },
+    Error { message: String },
+}
+
+#[derive(Serialize)]
+pub struct RunsResponse {
+    pub runs: Vec<CanvasRun>,
+}
+
+/// Run a task against the project's primary agent over `piscis-kernel`,
+/// streaming translated events to `on_event` and persisting the run on success.
+#[tauri::command]
+pub async fn run_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    task: String,
+    on_event: Channel<RunMsg>,
+) -> Result<(), String> {
+    let project = {
+        let store = state.store.lock().unwrap();
+        store.get_project(&id)
+    };
+    let Some(project) = project else {
+        let _ = on_event.send(RunMsg::Error {
+            message: format!("project {id} not found"),
+        });
+        return Ok(());
+    };
+
+    let creds = match LlmCreds::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = on_event.send(RunMsg::Error { message: e });
+            return Ok(());
+        }
+    };
+
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let workspace = runner::project_workspace(&base, &id);
+    let _ = std::fs::create_dir_all(&workspace);
+
+    let run_id = new_id();
+    let started = now_secs();
+    let cancel = Arc::new(AtomicBool::new(false));
+
+    let (tx, mut rx) = mpsc::channel::<UiEvent>(256);
+    let proj = project.clone();
+    let task_run = task.clone();
+    let creds_run = creds.clone();
+    let ws = workspace.clone();
+    let cancel_run = cancel.clone();
+    let handle = tokio::spawn(async move {
+        runner::run_project_task(&proj, &task_run, &creds_run, &ws, tx, cancel_run).await
+    });
+
+    let mut collected: Vec<UiEvent> = Vec::new();
+    while let Some(ev) = rx.recv().await {
+        collected.push(ev.clone());
+        let _ = on_event.send(RunMsg::Event { event: ev });
+    }
+
+    let outcome = handle
+        .await
+        .map_err(|e| format!("run task join error: {e}"))?;
+
+    match outcome {
+        Ok(out) => {
+            let metrics: BTreeMap<String, NodeMetrics> =
+                runner::metrics_from_events(&collected).into_iter().collect();
+            let run = CanvasRun {
+                id: run_id,
+                project_id: id.clone(),
+                project_rev: project.rev,
+                parent: None,
+                task,
+                result: out.result.clone(),
+                created_at: started,
+                duration_ms: ((now_secs() - started) * 1000.0).round() as u64,
+                total_tokens: out.total_input_tokens + out.total_output_tokens,
+                metrics,
+            };
+            {
+                let store = state.store.lock().unwrap();
+                store.save_canvas_run(&run);
+            }
+            let _ = on_event.send(RunMsg::Result {
+                result: out.result,
+                run,
+            });
+            Ok(())
+        }
+        Err(e) => {
+            let _ = on_event.send(RunMsg::Error { message: e });
+            Ok(())
+        }
+    }
+}
+
+#[tauri::command]
+pub fn list_canvas_runs(
+    state: State<'_, AppState>,
+    id: String,
+    limit: Option<u32>,
+) -> RunsResponse {
+    let runs = state
+        .store
+        .lock()
+        .unwrap()
+        .list_canvas_runs(&id, limit.unwrap_or(25));
+    RunsResponse { runs }
+}
+
+#[tauri::command]
+pub fn session_tree(state: State<'_, AppState>, id: String, limit: Option<u32>) -> SessionTree {
+    state
+        .store
+        .lock()
+        .unwrap()
+        .session_tree(&id, limit.unwrap_or(200))
 }
 
 /// Smoke command retained from P0: parse a YAML agent config and return its

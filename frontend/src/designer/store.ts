@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import {
   AgentEvent, ApiError, api, CanvasRun, CollabState, ComponentSpec, EditOp, EditProposal,
-  isDesktop, Layout, NodeMetrics, Project, RuntimeRun, SessionNode,
+  isDesktop, Layout, NodeMetrics, Project, RunMsg, RuntimeRun, SessionNode,
 } from "../api";
 
 function clientIdentity(): { id: string; name: string } {
@@ -237,46 +237,34 @@ export const useDesigner = create<DesignerState>((set, get) => ({
     if (!id || !task.trim()) return;
     set({ running: true, error: "", runLog: [], runResult: "", metrics: {}, overlayRunId: null });
     const events: AgentEvent[] = [];
-    const parent = get().forkParent;
-    const parentTurn = get().forkTurn;
-    try {
-      const resp = await api.runProjectStream(
-        id, task, parent ?? undefined, parentTurn ?? undefined,
-      );
-      if (!resp.ok || !resp.body) throw new Error(`stream failed (${resp.status})`);
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const blocks = buf.split(/\r?\n\r?\n/);
-        buf = blocks.pop() ?? "";
-        for (const block of blocks) {
-          const line = block.split(/\r?\n/).find((l) => l.startsWith("data:"));
-          if (!line) continue;
-          let msg: { type: string; event?: AgentEvent; result?: string; message?: string; run?: CanvasRun };
-          try {
-            msg = JSON.parse(line.slice(5).trim());
-          } catch {
-            continue;
-          }
-          if (msg.type === "event" && msg.event) {
-            events.push(msg.event);
-            set({ runLog: [...events], metrics: computeMetrics(events) });
-          } else if (msg.type === "result") {
-            set({ runResult: msg.result ?? "" });
-            if (msg.run) set({ runs: [msg.run, ...get().runs] });
-          } else if (msg.type === "error") {
-            set({ error: msg.message ?? "run error" });
-          }
-        }
+    // Light up nodes live by deriving a coarse phase from streamed events.
+    const phaseFor = (e: AgentEvent): string | null => {
+      if (e.kind === "tool_call") return "tool";
+      if (e.kind === "turn_start" || e.kind === "text") return "think";
+      if (e.kind === "run_end" || e.kind === "cancelled" || e.kind === "error") return "done";
+      return null;
+    };
+    const onMsg = (msg: RunMsg) => {
+      if (msg.type === "event") {
+        const e = msg.event;
+        events.push(e);
+        const phase = phaseFor(e);
+        const patch: Partial<DesignerState> = { runLog: [...events], metrics: computeMetrics(events) };
+        if (phase) patch.runtimeAgentPhase = { ...get().runtimeAgentPhase, [e.agent]: phase };
+        set(patch);
+      } else if (msg.type === "result") {
+        set({ runResult: msg.result ?? "" });
+        if (msg.run) set({ runs: [msg.run, ...get().runs] });
+      } else if (msg.type === "error") {
+        set({ error: msg.message ?? "run error" });
       }
-      set({ running: false, forkParent: null, forkTurn: null });
+    };
+    try {
+      await api.runProjectChannel(id, task, onMsg);
+      set({ running: false, forkParent: null, forkTurn: null, runtimeAgentPhase: {} });
       get().loadSession();
     } catch (e) {
-      set({ error: String(e), running: false });
+      set({ error: String(e), running: false, runtimeAgentPhase: {} });
     }
   },
 

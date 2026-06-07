@@ -4,7 +4,7 @@
 // current phase resolve to safe empty defaults (so the UI degrades gracefully)
 // or reject with a clear "coming in P<n>" message.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 
 /** True when running inside the Tauri webview (vs. a plain browser). */
 export function isDesktop(): boolean {
@@ -172,6 +172,12 @@ export interface AgentEvent {
   ts: number;
 }
 
+/** A streaming message from a live run (Tauri IPC channel envelope). */
+export type RunMsg =
+  | { type: "event"; event: AgentEvent }
+  | { type: "result"; result: string; run: CanvasRun }
+  | { type: "error"; message: string };
+
 export interface EditProposal {
   ops: EditOp[];
   explanation: string;
@@ -249,13 +255,21 @@ export const api = {
   },
 
   // ── Run console / observability (P3) ──────────────────────────────────────
-  listCanvasRuns: (_id: string, _limit = 25) => Promise.resolve({ runs: [] as CanvasRun[] }),
-  runProject: (_id: string, _task: string) =>
-    comingSoon<{ result: string; events: AgentEvent[] }>("P3", "画布运行"),
-  runProjectStream: (_id: string, _task: string, _parent?: string, _parentTurn?: number) =>
-    comingSoon<Response>("P3", "画布运行"),
-  sessionTree: (_id: string) =>
-    Promise.resolve({ nodes: [] as SessionNode[], roots: [] as string[] }),
+  listCanvasRuns: (id: string, limit = 25) =>
+    invoke<{ runs: CanvasRun[] }>("list_canvas_runs", { id, limit }),
+  sessionTree: (id: string) =>
+    invoke<{ nodes: SessionNode[]; roots: string[] }>("session_tree", { id }),
+  /**
+   * Run a task live, streaming events back over a Tauri IPC channel. The
+   * returned promise resolves when the run finishes (success or handled error;
+   * terminal state is delivered as a `result`/`error` message via `onMsg`).
+   */
+  runProjectChannel: (id: string, task: string, onMsg: (msg: RunMsg) => void) => {
+    const channel = new Channel<RunMsg>();
+    channel.onmessage = onMsg;
+    // Tauri converts camelCase JS args → snake_case Rust params.
+    return invoke<void>("run_project", { id, task, onEvent: channel });
+  },
   runtimeRuns: (_projectId?: string, _activeOnly = false) =>
     Promise.resolve({ runs: [] as RuntimeRun[] }),
   runtimeStreamUrl: (_projectId?: string) => "",
