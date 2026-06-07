@@ -22,6 +22,10 @@ frontend/dist/
 dist/
 *.tsbuildinfo
 
+# ── Tauri ───────────────────────────────────────────────
+src-tauri/gen/
+src-tauri/target/
+
 # ── Koi orchestration & local runtime artifacts ─────────
 .koi-worktrees/
 .pisci/

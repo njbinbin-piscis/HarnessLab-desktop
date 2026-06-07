@@ -1,41 +1,50 @@
-[package]
-name = "agent-workbench"
-version = "0.1.0"
-edition = "2021"
-description = "Agent Workbench - Configuration-driven agent experimentation platform"
+# HarnessLab Desktop — Cargo workspace.
+#
+# Members:
+#   crates/harnesslab-core  — project model / ops / registry / experiment /
+#                             factory / design / market logic + headless CLI.
+#   src-tauri               — the Tauri v2 desktop shell (commands + events).
+#
+# The agent runtime is consumed from the standalone `piscis-engine` repo as a
+# git dependency (rev pinned below, shared with openpiscis / AgentZ). For local
+# engine hacking, add a `[patch."https://github.com/njbinbin-piscis/piscis-engine.git"]`
+# section pointing the crates at a sibling `../piscis-engine` checkout.
+[workspace]
+members = ["crates/harnesslab-core", "src-tauri"]
+resolver = "2"
 
-[dependencies]
-# Pin matches openpiscis / AgentZ workspace (tag v0.8.42 on piscis-engine).
-piscis-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-kernel", rev = "v0.8.42" }
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+needless_return = "allow"
+module_inception = "allow"
+too_many_arguments = "allow"
+
+[workspace.dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+
+# Shared agent runtime — pin rev across openpiscis, AgentZ, agent-workbench (v0.8.47).
+piscis-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-kernel", rev = "v0.8.47" }
 
 # Local engine hacking — uncomment and comment out the git dep above:
 # [patch."https://github.com/njbinbin-piscis/piscis-engine.git"]
 # piscis-kernel = { path = "../piscis-engine/piscis-kernel" }
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
-serde_json = "1"
-anyhow = "1"
-thiserror = "1"
-tokio = { version = "1", features = ["full"] }
-glob = "0.3"
-chrono = { version = "0.4", features = ["serde"] }
-async-trait = "0.1"
 
-[dev-dependencies]
-tempfile = "3"
+[profile.dev]
+incremental = true
 
-[[test]]
-name = "config_loader"
-path = "tests/benchmark/config_loader.rs"
-
-[[test]]
-name = "benchmark_runner"
-path = "tests/benchmark/runner.rs"
-
-[[test]]
-name = "config_validation"
-path = "tests/benchmark/config_validation.rs"
-
-[[test]]
-name = "phase3_validation"
-path = "tests/benchmark/phase3_validation.rs"
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

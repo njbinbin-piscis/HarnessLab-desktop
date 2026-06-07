@@ -1,0 +1,50 @@
+[package]
+name = "harnesslab-core"
+version = "0.1.0"
+edition = "2021"
+description = "HarnessLab Desktop core — project model, ops, registry, experiment, factory, design and market logic (Rust, no Python)."
+autotests = false
+
+[lib]
+name = "harnesslab_core"
+path = "src/lib.rs"
+
+# Headless CLI over the configuration-driven harness builder (the former
+# agent-workbench binary). Kept as a non-GUI entry point.
+[[bin]]
+name = "harnesslab-headless"
+path = "src/main.rs"
+
+[dependencies]
+piscis-kernel = { workspace = true }
+serde = { workspace = true }
+serde_yaml = "0.9"
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+glob = "0.3"
+chrono = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[test]]
+name = "config_loader"
+path = "tests/config_loader.rs"
+
+[[test]]
+name = "benchmark_runner"
+path = "tests/runner.rs"
+
+[[test]]
+name = "config_validation"
+path = "tests/config_validation.rs"
+
+[[test]]
+name = "phase3_validation"
+path = "tests/phase3_validation.rs"
+
+[lints]
+workspace = true

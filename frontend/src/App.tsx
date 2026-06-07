@@ -1,120 +1,112 @@
-import { useState } from 'react'
-import ConfigEditor from './components/ConfigEditor'
-import ExecutionMonitor from './components/ExecutionMonitor'
-import MetaAgentWizard from './components/MetaAgentWizard'
-import EvaluationDashboard from './components/EvaluationDashboard'
-import DesignStudio from './components/DesignStudio'
-import './App.css'
+import { useState } from "react";
+import { LibraryBrowser } from "./components/LibraryBrowser";
+import { ProjectWorkspace } from "./components/ProjectWorkspace";
+import { VisualDesigner } from "./components/VisualDesigner";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { DesignStudio } from "./components/DesignStudio";
+import { ExperimentDashboard } from "./components/ExperimentDashboard";
+import { FactoryPanel } from "./components/FactoryPanel";
+import { MarketPanel } from "./components/MarketPanel";
+import { Icon } from "./components/icons";
 
-type Tab = 'design' | 'studio' | 'evaluation'
+type Tab = "projects" | "designer" | "design" | "library" | "experiments" | "factory" | "market";
 
-function App() {
-  const [yamlConfig, setYamlConfig] = useState('')
-  const [prompt, setPrompt] = useState('')
-  const [isRunning, setIsRunning] = useState(false)
-  const [showWizard, setShowWizard] = useState(false)
-  const [tab, setTab] = useState<Tab>('design')
+type NavItem = { id: Tab; label: string; icon: keyof typeof Icon; blurb: string };
 
-  const handleConfigGenerated = (yaml: string) => {
-    setYamlConfig(yaml)
-    setShowWizard(false)
-  }
+const NAV: { group: string; items: NavItem[] }[] = [
+  {
+    group: "Build",
+    items: [
+      { id: "projects", label: "Projects", icon: "projects", blurb: "Compose agents, topologies and algorithm slots." },
+      { id: "designer", label: "Visual Designer", icon: "design", blurb: "Wire agents, slots and tools on a live canvas; edits are validated and round-trip to runnable code." },
+      { id: "design", label: "Design Assistant", icon: "design", blurb: "Describe a system; get a project scaffold and author new components." },
+    ],
+  },
+  {
+    group: "Library",
+    items: [
+      { id: "library", label: "Algorithm Library", icon: "library", blurb: "Browse components and copy reference code in Python, TypeScript and Rust." },
+    ],
+  },
+  {
+    group: "Evaluate",
+    items: [
+      { id: "experiments", label: "Experiments", icon: "experiments", blurb: "Run evaluations, track cost/latency and compare on the leaderboard." },
+    ],
+  },
+  {
+    group: "Ship",
+    items: [
+      { id: "factory", label: "Factory · Codegen", icon: "factory", blurb: "Generate a standalone, runnable codebase from a project." },
+      { id: "market", label: "Market", icon: "market", blurb: "Install and publish decentralized algorithm & dataset packages." },
+    ],
+  },
+];
+
+const ALL = NAV.flatMap((g) => g.items);
+
+export function App() {
+  const [tab, setTab] = useState<Tab>("projects");
+  const [activeProject, setActiveProject] = useState<string | null>(null);
+  const current = ALL.find((i) => i.id === tab)!;
 
   return (
-    <div className="app-container">
-      <header className="app-header">
-        <h1>Agent Workbench</h1>
-        <p>可插拔 · 可调参 · 可观察的 Agent 实验平台</p>
-        <nav className="app-tabs">
-          <button
-            className={tab === 'design' ? 'tab active' : 'tab'}
-            onClick={() => setTab('design')}
-          >
-            设计 & 运行
-          </button>
-          <button
-            className={tab === 'studio' ? 'tab active' : 'tab'}
-            onClick={() => setTab('studio')}
-          >
-            设计助手 & 自举
-          </button>
-          <button
-            className={tab === 'evaluation' ? 'tab active' : 'tab'}
-            onClick={() => setTab('evaluation')}
-          >
-            验证集 & 评测
-          </button>
-        </nav>
-      </header>
+    <div className="shell">
+      <div className="brand">
+        <span className="logo">H</span>
+        <h1>HarnessLab</h1>
+      </div>
 
-      {tab === 'evaluation' ? (
-        <main className="app-main-full">
-          <EvaluationDashboard initialYaml={yamlConfig || undefined} />
-        </main>
-      ) : tab === 'studio' ? (
-        <main className="app-main-full">
-          <DesignStudio
-            onUseConfig={(yaml) => {
-              setYamlConfig(yaml)
-              setTab('design')
-            }}
-          />
-        </main>
-      ) : (
-      <main className="app-main">
-        {!showWizard ? (
-          <>
-            <div className="editor-section">
-              <div className="editor-header">
-                <h2>YAML Configuration</h2>
-                <button 
-                  className="wizard-btn"
-                  onClick={() => setShowWizard(true)}
+      <div className="topbar">
+        <span className="crumb">
+          {current.label}
+          {activeProject && <> · <b>project {activeProject.slice(0, 8)}</b></>}
+        </span>
+        <span className="spacer" />
+        <span className="env"><span className="dot" />Python engine · hot-reload</span>
+      </div>
+
+      <nav className="sidebar">
+        {NAV.map((g) => (
+          <div key={g.group} className="group">
+            <div className="group-label">{g.group}</div>
+            {g.items.map((it) => {
+              const Glyph = Icon[it.icon];
+              return (
+                <button
+                  key={it.id}
+                  className={"nav-item" + (tab === it.id ? " active" : "")}
+                  onClick={() => setTab(it.id)}
                 >
-                  ✨ Use Agent Wizard
+                  <Glyph />
+                  {it.label}
                 </button>
-              </div>
-              <ConfigEditor 
-                value={yamlConfig} 
-                onChange={setYamlConfig} 
-              />
-              <textarea
-                className="prompt-input"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Prompt for the agent (optional — a self-test prompt is used if empty)"
-                rows={3}
-                spellCheck={false}
-              />
-              <button 
-                className="run-button"
-                onClick={() => setIsRunning(true)}
-                disabled={!yamlConfig || isRunning}
-              >
-                {isRunning ? 'Running...' : 'Run Agent'}
-              </button>
-            </div>
-            
-            <div className="monitor-section">
-              <h2>Execution Monitor</h2>
-              <ExecutionMonitor 
-                isActive={isRunning} 
-                yamlConfig={yamlConfig}
-                prompt={prompt}
-                onFinished={() => setIsRunning(false)}
-              />
-            </div>
-          </>
-        ) : (
-          <MetaAgentWizard 
-            onConfigGenerated={handleConfigGenerated}
-            onCancel={() => setShowWizard(false)}
-          />
-        )}
-      </main>
-      )}
-    </div>
-  )
-}
+              );
+            })}
+          </div>
+        ))}
+      </nav>
 
-export default App
+      <main className="content">
+        <div className="content-head">
+          <h2>{current.label}</h2>
+          <p>{current.blurb}</p>
+        </div>
+
+        {tab === "projects" && (
+          <ProjectWorkspace activeProject={activeProject} setActiveProject={setActiveProject} />
+        )}
+        {tab === "designer" && (
+          <ErrorBoundary>
+            <VisualDesigner activeProject={activeProject} setActiveProject={setActiveProject} />
+          </ErrorBoundary>
+        )}
+        {tab === "design" && <DesignStudio onSaved={(id) => { setActiveProject(id); setTab("experiments"); }} />}
+        {tab === "library" && <LibraryBrowser />}
+        {tab === "experiments" && <ExperimentDashboard activeProject={activeProject} setActiveProject={setActiveProject} />}
+        {tab === "factory" && <FactoryPanel activeProject={activeProject} setActiveProject={setActiveProject} />}
+        {tab === "market" && <MarketPanel />}
+      </main>
+    </div>
+  );
+}
