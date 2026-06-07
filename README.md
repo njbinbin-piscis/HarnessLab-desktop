@@ -40,7 +40,7 @@ parameter schema, so the UI and the Architect can discover what is available.
 ## `piscis-engine` dependency
 
 The Rust CLI links `piscis-kernel` as a **git dependency** pinned to tag
-**`v0.8.38`** (same rev as openpiscis and CodeZ). To hack the kernel locally,
+**`v0.8.38`** (same rev as openpiscis and AgentZ). To hack the kernel locally,
 uncomment the `[patch]` block at the bottom of `Cargo.toml` and point it at a
 sibling `../piscis-engine` checkout.
 

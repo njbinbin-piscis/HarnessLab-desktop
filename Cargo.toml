@@ -5,7 +5,7 @@ edition = "2021"
 description = "Agent Workbench - Configuration-driven agent experimentation platform"
 
 [dependencies]
-# Pin matches openpiscis / CodeZ workspace (tag v0.8.42 on piscis-engine).
+# Pin matches openpiscis / AgentZ workspace (tag v0.8.42 on piscis-engine).
 piscis-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-kernel", rev = "v0.8.42" }
 
 # Local engine hacking — uncomment and comment out the git dep above:

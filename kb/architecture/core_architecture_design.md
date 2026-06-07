@@ -64,7 +64,7 @@
     - `on_llm_call_event`: LLM 调用事件（BeforeLlmCall, AfterLlmResponse）。
 
 ### 3.2 钩子应用场景
-- **CodeZ File Journal**: 在 `file_write` 前快照文件内容，支持 Undo。
+- **AgentZ File Journal**: 在 `file_write` 前快照文件内容，支持 Undo。
 - **审计日志**: 记录所有工具调用的输入输出。
 - **动态 Prompt 注入**: 在 `BeforePromptAssembly` 时根据当前状态注入额外信息。
 
