@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import {
   AgentEvent, ApiError, api, CanvasRun, CollabState, ComponentSpec, EditOp, EditProposal,
-  Layout, NodeMetrics, Project, RuntimeRun, SessionNode,
+  isDesktop, Layout, NodeMetrics, Project, RuntimeRun, SessionNode,
 } from "../api";
 
 function clientIdentity(): { id: string; name: string } {
@@ -342,6 +342,8 @@ export const useDesigner = create<DesignerState>((set, get) => ({
 
   startRuntimeMonitor: (projectId: string) => {
     get().stopRuntimeMonitor();
+    // Live runtime monitoring lands in P3; skip on the desktop for now.
+    if (isDesktop()) return;
     const apply = (runs: RuntimeRun[], active: number) => {
       const phases: Record<string, string> = {};
       for (const r of runs) {
@@ -406,6 +408,8 @@ export const useDesigner = create<DesignerState>((set, get) => ({
 
   startCollab: (projectId: string) => {
     get().stopCollab();
+    // Multi-user collaboration is dropped for the single-user desktop.
+    if (isDesktop()) return;
     const { clientId, clientName } = get();
     const apply = (st: CollabState) =>
       set({ presence: st.presence, locks: st.locks, lease: st.lease, handoff: st.handoff ?? null });

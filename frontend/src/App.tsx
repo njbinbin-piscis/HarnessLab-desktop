@@ -63,7 +63,7 @@ export function App() {
           {activeProject && <> · <b>project {activeProject.slice(0, 8)}</b></>}
         </span>
         <span className="spacer" />
-        <span className="env"><span className="dot" />Python engine · hot-reload</span>
+        <span className="env"><span className="dot" />Rust engine · piscis-kernel · desktop</span>
       </div>
 
       <nav className="sidebar">

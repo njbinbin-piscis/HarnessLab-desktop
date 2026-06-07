@@ -1,20 +1,14 @@
-const BASE = "/api/v1";
+// Desktop data layer. In HarnessLab (web) this module spoke HTTP REST/SSE to a
+// FastAPI backend; in HarnessLab Desktop it speaks **Tauri IPC** to the Rust
+// core. Implemented commands go over `invoke`; endpoints not yet ported in the
+// current phase resolve to safe empty defaults (so the UI degrades gracefully)
+// or reject with a clear "coming in P<n>" message.
 
-async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(BASE + path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
-  if (!res.ok) {
-    let detail: unknown = res.statusText;
-    try {
-      detail = (await res.json()).detail ?? detail;
-    } catch {
-      /* ignore */
-    }
-    throw new ApiError(res.status, detail);
-  }
-  return res.json() as Promise<T>;
+import { invoke } from "@tauri-apps/api/core";
+
+/** True when running inside the Tauri webview (vs. a plain browser). */
+export function isDesktop(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 export interface ComponentSpec {
@@ -202,106 +196,101 @@ export interface Topology {
   agent_order: string[];
 }
 
+// Reject helper for endpoints not yet wired in the current phase.
+function comingSoon<T>(phase: string, feature: string): Promise<T> {
+  return Promise.reject(new ApiError(501, `${feature} 将在 ${phase} 提供`));
+}
+
+const EMPTY_COLLAB: CollabState = {
+  version: 0,
+  presence: [],
+  locks: {},
+  lease: null,
+  handoff: null,
+};
+
 export const api = {
-  catalog: () => req<Record<string, ComponentSpec[]>>("/registry"),
-  tools: () => req<{ tools: { name: string; description: string }[] }>("/registry/tools/list"),
+  // ── Registry / catalog (P1) ───────────────────────────────────────────────
+  catalog: () => invoke<Record<string, ComponentSpec[]>>("registry_catalog"),
+  tools: () => invoke<{ tools: { name: string; description: string }[] }>("registry_tools"),
   componentReference: (kind: string, name: string) =>
-    req<ComponentReference>(`/registry/${kind}/${name}/reference`),
-  reloadLibrary: () => req("/registry/reload", { method: "POST" }),
-  listProjects: () => req<{ id: string; name: string }[]>("/projects"),
-  getProject: (id: string) => req<Project>(`/projects/${id}`),
-  createProject: (p: Project) => req<Project>("/projects", { method: "POST", body: JSON.stringify(p) }),
-  updateProject: (id: string, p: Project) =>
-    req<Project>(`/projects/${id}`, { method: "PUT", body: JSON.stringify(p) }),
-  deleteProject: (id: string) => req(`/projects/${id}`, { method: "DELETE" }),
-  applyOps: (id: string, ops: EditOp[], dry_run = false, base_rev?: number, client_id?: string) =>
-    req<OpsResult>(`/projects/${id}/ops`, { method: "POST", body: JSON.stringify({ ops, dry_run, base_rev, client_id }) }),
-  listCanvasRuns: (id: string, limit = 25) =>
-    req<{ runs: CanvasRun[] }>(`/projects/${id}/runs?limit=${limit}`),
-  collabJoin: (id: string, client_id: string, name: string) =>
-    req<CollabState>(`/collab/${id}/join`, { method: "POST", body: JSON.stringify({ client_id, name }) }),
-  collabHeartbeat: (id: string, client_id: string) =>
-    req<CollabState>(`/collab/${id}/heartbeat`, { method: "POST", body: JSON.stringify({ client_id }) }),
-  collabLeave: (id: string, client_id: string) =>
-    req<CollabState>(`/collab/${id}/leave`, { method: "POST", body: JSON.stringify({ client_id }) }),
-  collabLock: (id: string, client_id: string, target: string) =>
-    req<LockResult>(`/collab/${id}/lock`, { method: "POST", body: JSON.stringify({ client_id, target }) }),
-  collabUnlock: (id: string, client_id: string, target: string) =>
-    req<CollabState>(`/collab/${id}/unlock`, { method: "POST", body: JSON.stringify({ client_id, target }) }),
-  leaseAcquire: (id: string, client_id: string, name: string) =>
-    req<LockResult>(`/collab/${id}/lease/acquire`, { method: "POST", body: JSON.stringify({ client_id, name }) }),
-  leaseRelease: (id: string, client_id: string) =>
-    req<CollabState>(`/collab/${id}/lease/release`, { method: "POST", body: JSON.stringify({ client_id }) }),
-  leaseRequest: (id: string, client_id: string, name: string) =>
-    req<LockResult>(`/collab/${id}/lease/request`, { method: "POST", body: JSON.stringify({ client_id, name }) }),
-  collabStreamUrl: (id: string, client_id: string, name: string) =>
-    `${BASE}/collab/${id}/stream?client_id=${encodeURIComponent(client_id)}&name=${encodeURIComponent(name)}`,
-  collabWsUrl: (id: string, client_id: string, name: string) => {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const q = `client_id=${encodeURIComponent(client_id)}&name=${encodeURIComponent(name)}`;
-    return `${proto}//${location.host}${BASE}/collab/${id}/ws?${q}`;
-  },
-  getLayout: (id: string) => req<Layout>(`/projects/${id}/layout`),
-  saveLayout: (id: string, layout: Layout) =>
-    req<Layout>(`/projects/${id}/layout`, { method: "PUT", body: JSON.stringify(layout) }),
-  runProject: (id: string, task: string) =>
-    req<{ result: string; events: AgentEvent[] }>(`/projects/${id}/run`, {
-      method: "POST",
-      body: JSON.stringify({ task }),
-    }),
-  runProjectStream: (id: string, task: string, parent_run?: string, parent_turn?: number) =>
-    fetch(BASE + `/projects/${id}/run/stream`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task, parent_run, parent_turn }),
-    }),
-  sessionTree: (id: string) =>
-    req<{ nodes: SessionNode[]; roots: string[] }>(`/projects/${id}/session`),
-  runtimeRuns: (project_id?: string, active_only = false) =>
-    req<{ runs: RuntimeRun[] }>(
-      `/runtime/runs?${project_id ? `project_id=${encodeURIComponent(project_id)}&` : ""}active_only=${active_only}`,
-    ),
-  runtimeStreamUrl: (project_id?: string) =>
-    `${BASE}/runtime/stream${project_id ? `?project_id=${encodeURIComponent(project_id)}` : ""}`,
-  designEdit: (project_id: string, instruction: string) =>
-    req<EditProposal>("/design/edit", {
-      method: "POST",
-      body: JSON.stringify({ project_id, instruction }),
-    }),
-  listDatasets: () => req<{ id: string; scorer: string; num_tasks: number; source: string }[]>("/datasets"),
-  evalRun: (project_id: string, dataset_id: string) =>
-    req<any>("/eval-runs", { method: "POST", body: JSON.stringify({ project_id, dataset_id }) }),
-  listRuns: (project_id?: string) =>
-    req<any[]>("/eval-runs" + (project_id ? `?project_id=${project_id}` : "")),
-  getRun: (id: string) => req<any>(`/eval-runs/${id}`),
-  leaderboard: (dataset_id?: string, limit = 20) =>
-    req<any[]>("/leaderboard?limit=" + limit + (dataset_id ? `&dataset_id=${dataset_id}` : "")),
-  design: (request: string) =>
-    req<{ source: string; project: Project }>("/design/generate", {
-      method: "POST",
-      body: JSON.stringify({ request }),
-    }),
-  authorComponent: (kind: string, name: string, description: string) =>
-    req("/design/components", { method: "POST", body: JSON.stringify({ kind, name, description }) }),
-  languages: () => req<{ languages: string[] }>("/factory/languages"),
-  generate: (project_id: string, language: string, options: Record<string, unknown> = {}) =>
-    req<{ language: string; files: Record<string, string> }>("/factory/generate", {
-      method: "POST",
-      body: JSON.stringify({ project_id, language, options }),
-    }),
-  embeddingStatus: (probe = false) =>
-    req<{ backends: string[]; api_configured: boolean; base_url: string; model: string;
-      probe?: { ok: boolean; dim?: number; note?: string; reason?: string } }>(
-      "/registry/embeddings/status" + (probe ? "?probe=true" : ""),
-    ),
-  marketInstalled: () => req<any[]>("/market/installed"),
-  marketInspect: (source: string) =>
-    req<any>("/market/inspect", { method: "POST", body: JSON.stringify({ source }) }),
-  marketInstall: (source: string, consent_capabilities = false) =>
-    req<any>("/market/install", {
-      method: "POST",
-      body: JSON.stringify({ source, consent_capabilities }),
-    }),
-  marketUninstall: (name: string) => req(`/market/${name}`, { method: "DELETE" }),
-  downloadUrl: BASE + "/factory/download",
+    invoke<ComponentReference>("component_reference", { kind, name }),
+  reloadLibrary: () => Promise.resolve({}),
+
+  // ── Projects (P1) ─────────────────────────────────────────────────────────
+  listProjects: () => invoke<{ id: string; name: string }[]>("list_projects"),
+  getProject: (id: string) => invoke<Project>("get_project", { id }),
+  createProject: (p: Project) => invoke<Project>("create_project", { project: p }),
+  updateProject: (id: string, p: Project) => invoke<Project>("update_project", { id, project: p }),
+  deleteProject: (id: string) => invoke<void>("delete_project", { id }),
+
+  // ── Layout / canvas view-state (P1) ───────────────────────────────────────
+  getLayout: (id: string) => invoke<Layout>("get_layout", { id }),
+  saveLayout: (id: string, layout: Layout) => invoke<Layout>("save_layout", { id, layout }),
+
+  // ── Edit Ops (P2) ─────────────────────────────────────────────────────────
+  applyOps: (_id: string, _ops: EditOp[], _dry = false, _baseRev?: number, _clientId?: string) =>
+    comingSoon<OpsResult>("P2", "结构化编辑（Edit Ops）"),
+
+  // ── Run console / observability (P3) ──────────────────────────────────────
+  listCanvasRuns: (_id: string, _limit = 25) => Promise.resolve({ runs: [] as CanvasRun[] }),
+  runProject: (_id: string, _task: string) =>
+    comingSoon<{ result: string; events: AgentEvent[] }>("P3", "画布运行"),
+  runProjectStream: (_id: string, _task: string, _parent?: string, _parentTurn?: number) =>
+    comingSoon<Response>("P3", "画布运行"),
+  sessionTree: (_id: string) =>
+    Promise.resolve({ nodes: [] as SessionNode[], roots: [] as string[] }),
+  runtimeRuns: (_projectId?: string, _activeOnly = false) =>
+    Promise.resolve({ runs: [] as RuntimeRun[] }),
+  runtimeStreamUrl: (_projectId?: string) => "",
+
+  // ── Collaboration (dropped for the single-user desktop) ───────────────────
+  collabJoin: (_id: string, _clientId: string, _name: string) => Promise.resolve(EMPTY_COLLAB),
+  collabHeartbeat: (_id: string, _clientId: string) => Promise.resolve(EMPTY_COLLAB),
+  collabLeave: (_id: string, _clientId: string) => Promise.resolve(EMPTY_COLLAB),
+  collabLock: (_id: string, _clientId: string, _target: string) =>
+    Promise.resolve({ ok: true, state: EMPTY_COLLAB } as LockResult),
+  collabUnlock: (_id: string, _clientId: string, _target: string) => Promise.resolve(EMPTY_COLLAB),
+  leaseAcquire: (_id: string, _clientId: string, _name: string) =>
+    Promise.resolve({ ok: true, state: EMPTY_COLLAB } as LockResult),
+  leaseRelease: (_id: string, _clientId: string) => Promise.resolve(EMPTY_COLLAB),
+  leaseRequest: (_id: string, _clientId: string, _name: string) =>
+    Promise.resolve({ ok: true, state: EMPTY_COLLAB } as LockResult),
+  collabStreamUrl: (_id: string, _clientId: string, _name: string) => "",
+  collabWsUrl: (_id: string, _clientId: string, _name: string) => "",
+
+  // ── Design / Copilot (P5) ─────────────────────────────────────────────────
+  designEdit: (_projectId: string, _instruction: string) =>
+    comingSoon<EditProposal>("P5", "AI Copilot"),
+  design: (_request: string) => comingSoon<{ source: string; project: Project }>("P5", "Design Assistant"),
+  authorComponent: (_kind: string, _name: string, _description: string) =>
+    comingSoon("P5", "组件创作"),
+
+  // ── Datasets / experiments (P3+) ──────────────────────────────────────────
+  listDatasets: () =>
+    Promise.resolve([] as { id: string; scorer: string; num_tasks: number; source: string }[]),
+  evalRun: (_projectId: string, _datasetId: string) => comingSoon<any>("P3", "评测运行"),
+  listRuns: (_projectId?: string) => Promise.resolve([] as any[]),
+  getRun: (id: string) => comingSoon<any>("P3", `运行 ${id}`),
+  leaderboard: (_datasetId?: string, _limit = 20) => Promise.resolve([] as any[]),
+
+  // ── Factory codegen (P4) ──────────────────────────────────────────────────
+  languages: () => Promise.resolve({ languages: ["python", "typescript", "rust"] }),
+  generate: (_projectId: string, _language: string, _options: Record<string, unknown> = {}) =>
+    comingSoon<{ language: string; files: Record<string, string> }>("P4", "代码生成"),
+
+  // ── Embeddings / market (later) ───────────────────────────────────────────
+  embeddingStatus: (_probe = false) =>
+    Promise.resolve<{
+      backends: string[];
+      api_configured: boolean;
+      base_url: string;
+      model: string;
+      probe?: { ok: boolean; dim?: number; note?: string; reason?: string };
+    }>({ backends: ["bow", "hashing"], api_configured: false, base_url: "", model: "" }),
+  marketInstalled: () => Promise.resolve([] as any[]),
+  marketInspect: (_source: string) => comingSoon<any>("P6", "市场检视"),
+  marketInstall: (_source: string, _consent = false) => comingSoon<any>("P6", "市场安装"),
+  marketUninstall: (_name: string) => comingSoon("P6", "市场卸载"),
+  downloadUrl: "",
 };

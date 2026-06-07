@@ -13,9 +13,20 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::parse_agent_config,
+            commands::registry_catalog,
+            commands::registry_tools,
+            commands::component_reference,
+            commands::list_projects,
+            commands::get_project,
+            commands::create_project,
+            commands::update_project,
+            commands::delete_project,
+            commands::get_layout,
+            commands::save_layout,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HarnessLab Desktop");
