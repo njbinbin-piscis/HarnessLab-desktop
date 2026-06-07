@@ -41,7 +41,10 @@ fn default_context() -> Option<ComponentRef> {
     Some(ComponentRef::new("none"))
 }
 fn default_model() -> String {
-    "mock".to_string()
+    std::env::var("PISCIS_DEFAULT_MODEL").unwrap_or_else(|_| "qwen-plus".to_string())
+}
+fn default_credentials() -> Option<ComponentRef> {
+    Some(ComponentRef::new("env"))
 }
 fn default_system_prompt() -> String {
     "You are a helpful agent.".to_string()
@@ -126,7 +129,7 @@ impl AgentSpec {
             compaction: default_compaction(),
             memory: default_memory(),
             context: default_context(),
-            credentials: None,
+            credentials: default_credentials(),
             capabilities: None,
             skills: None,
             prompt: None,

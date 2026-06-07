@@ -12,6 +12,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   Viewport,
+  type Node as FlowNode,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "dagre";
@@ -22,15 +23,18 @@ import { Inspector } from "../designer/Inspector";
 import { Dock } from "../designer/Dock";
 import { SessionTreePanel } from "../designer/SessionTreePanel";
 import { useDesigner } from "../designer/store";
+import { useT } from "../i18n/context";
+import { Select } from "./Select";
 
 const COORD_ID = "__coordinator__";
 const SCORER_ID = "__scorer__";
 
 function CoordinatorNode({ data }: { data: { label: string } }) {
+  const t = useT();
   return (
     <div className="coord-node">
       <Handle type="target" position={Position.Left} />
-      <span className="cn-kicker">coordinator</span>
+      <span className="cn-kicker">{t("designer.coordinator")}</span>
       <span className="cn-name">{data.label}</span>
       <Handle type="source" position={Position.Right} />
     </div>
@@ -38,16 +42,28 @@ function CoordinatorNode({ data }: { data: { label: string } }) {
 }
 
 function ScorerNode({ data }: { data: { label: string } }) {
+  const t = useT();
   return (
     <div className="scorer-node">
       <Handle type="target" position={Position.Left} />
-      <span className="cn-kicker">scorer</span>
-      <span className="cn-name">{data.label || "—"}</span>
+      <span className="cn-kicker">{t("designer.scorer")}</span>
+      <span className="cn-name">{data.label || t("common.dash")}</span>
     </div>
   );
 }
 
 const nodeTypes: NodeTypes = { agent: AgentNode, coordinator: CoordinatorNode, scorer: ScorerNode };
+
+function minimapNodeColor(node: FlowNode): string {
+  switch (node.type) {
+    case "coordinator":
+      return "#ff6b6b";
+    case "scorer":
+      return "#4dd0e1";
+    default:
+      return "#5b8cff";
+  }
+}
 
 function autoLayout(ids: { id: string; w: number; h: number }[], edges: Edge[]): Record<string, { x: number; y: number }> {
   const g = new dagre.graphlib.Graph();
@@ -174,6 +190,7 @@ function Canvas() {
         nodes={styledNodes}
         edges={edges}
         nodeTypes={nodeTypes}
+        colorMode="dark"
         defaultViewport={layout.viewport}
         fitView={!layout.viewport}
         onNodeClick={onNodeClick}
@@ -183,9 +200,22 @@ function Canvas() {
         onPaneClick={() => select(null)}
         proOptions={{ hideAttribution: true }}
       >
-        <Background gap={18} />
-        <Controls showInteractive={false} />
-        <MiniMap pannable zoomable />
+        <Background gap={18} color="var(--border)" />
+        <Controls showInteractive={false} position="bottom-left" className="designer-flow-controls" />
+        <MiniMap
+          className="designer-flow-minimap"
+          position="bottom-right"
+          pannable
+          zoomable={false}
+          nodeColor={minimapNodeColor}
+          nodeStrokeWidth={0}
+          bgColor="var(--panel)"
+          maskColor="rgba(11, 13, 18, 0.72)"
+          maskStrokeColor="var(--accent)"
+          maskStrokeWidth={1}
+          style={{ width: 108, height: 68 }}
+          offsetScale={3}
+        />
       </ReactFlow>
     </div>
   );
@@ -214,31 +244,33 @@ function Toast() {
 }
 
 function OverlayBadge() {
+  const t = useT();
   const { overlayRunId, runs, showRunOnCanvas } = useDesigner();
   if (!overlayRunId) return null;
   const run = runs.find((r) => r.id === overlayRunId);
   return (
-    <div className="canvas-busy overlay" onClick={() => showRunOnCanvas(null)} title="click to clear" style={{ pointerEvents: "auto", cursor: "pointer" }}>
-      viewing past run{run ? ` · ${run.total_tokens.toLocaleString()} tok` : ""} ✕
+    <div className="canvas-busy overlay" onClick={() => showRunOnCanvas(null)} title={t("designer.clickToClear")} style={{ pointerEvents: "auto", cursor: "pointer" }}>
+      {t("designer.viewingRun")}{run ? ` · ${run.total_tokens.toLocaleString()} tok` : ""} ✕
     </div>
   );
 }
 
 function LeaseControl() {
+  const t = useT();
   const { lease, handoff, clientId, acquireLease, releaseLease, requestLease } = useDesigner();
   // Someone else holds the lease → show read-only badge + a "request access" nudge.
   if (lease && lease.client_id !== clientId) {
     const asked = !!handoff && handoff.client_id === clientId;
     return (
       <span className="lease-group">
-        <span className="lease-badge other" title="project is locked for editing">🔒 {lease.name} 编辑中 (只读)</span>
+        <span className="lease-badge other" title={t("designer.leaseLockedTitle")}>🔒 {t("designer.leaseEditing", { name: lease.name })}</span>
         <button
           className="btn lease-request"
           onClick={requestLease}
           disabled={asked}
-          title="ask the holder to release the edit lease"
+          title={t("designer.leaseAskTitle")}
         >
-          {asked ? "已请求…" : "请求编辑权"}
+          {asked ? t("designer.leaseRequested") : t("designer.leaseRequest")}
         </button>
       </span>
     );
@@ -250,20 +282,21 @@ function LeaseControl() {
       <button
         className={"btn lease-mine" + (waiting ? " lease-wanted" : "")}
         onClick={releaseLease}
-        title={waiting ? `${handoff!.name} 想要编辑权,点击释放` : "release the exclusive edit lease"}
+        title={waiting ? t("designer.leaseHandoffTitle", { name: handoff!.name }) : t("designer.leaseReleaseTitle")}
       >
-        {waiting ? `释放编辑租约 (${handoff!.name} 等待中)` : "释放编辑租约"}
+        {waiting ? t("designer.leaseReleaseWaiting", { name: handoff!.name }) : t("designer.leaseRelease")}
       </button>
     );
   }
-  return <button className="btn" onClick={acquireLease} title="take an exclusive edit lease">获取编辑租约</button>;
+  return <button type="button" className="btn" onClick={acquireLease} title={t("designer.leaseAcquireTitle")}>{t("designer.leaseAcquire")}</button>;
 }
 
 function PresenceBar() {
+  const t = useT();
   const { presence, clientId } = useDesigner();
   if (presence.length === 0) return null;
   return (
-    <div className="presence" title={`${presence.length} viewing`}>
+    <div className="presence" title={t("designer.presenceViewing", { count: presence.length })}>
       {presence.map((p) => (
         <span
           key={p.client_id}
@@ -279,16 +312,37 @@ function PresenceBar() {
 }
 
 export function VisualDesigner({ activeProject, setActiveProject }: Props) {
-  const { projectId, project, status, selection, lease, clientId, load, applyOps, startCollab, stopCollab, lockTarget, unlockTarget, sessionPanelOpen, setSessionPanelOpen, runtimeActive, startRuntimeMonitor, stopRuntimeMonitor } =
+  const t = useT();
+  const { projectId, project, status, selection, lease, clientId, load, applyOps, setNodePos, undo, redo, undoStack, redoStack, startCollab, stopCollab, lockTarget, unlockTarget, sessionPanelOpen, setSessionPanelOpen, runtimeActive, startRuntimeMonitor, stopRuntimeMonitor } =
     useDesigner();
   const readOnly = !!lease && lease.client_id !== clientId;
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
+  const [templates, setTemplates] = useState<{ id: string; name: string }[]>([]);
+  const [templatePick, setTemplatePick] = useState("");
+  const [libraryAgents, setLibraryAgents] = useState<{ id: string; name: string }[]>([]);
+  const [agentPick, setAgentPick] = useState("");
   const [dockOpen, setDockOpen] = useState(true);
   const lockedRef = useRef<string | null>(null);
 
   useEffect(() => {
     api.listProjects().then(setProjects).catch(() => {});
+    api.listLibraryAgents().then((a) => setLibraryAgents(a.map((x) => ({ id: x.id, name: x.name })))).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || readOnly) return;
+      if (e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (e.key === "z" && e.shiftKey || e.key === "y") {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo, readOnly]);
 
   useEffect(() => {
     if (activeProject && activeProject !== projectId) load(activeProject);
@@ -317,45 +371,86 @@ export function VisualDesigner({ activeProject, setActiveProject }: Props) {
     }
   }, [selection, lockTarget, unlockTarget]);
 
-  const addAgent = () => {
-    if (!project) return;
-    let i = project.agents.length + 1;
-    let name = `agent${i}`;
+  const importFromLibrary = async (libraryId: string) => {
+    if (!libraryId || !project) return;
+    const lib = await api.getLibraryAgent(libraryId);
+    if (!lib) return;
     const taken = new Set(project.agents.map((a) => a.name));
-    while (taken.has(name)) name = `agent${++i}`;
-    applyOps([{ op: "add_agent", name, loop: "react" }]);
+    if (taken.has(lib.name)) return;
+    await applyOps([{ op: "import_agent", spec: lib.spec }]);
+  };
+
+  const autoLayout = () => {
+    if (!project) return;
+    const { nodes } = buildGraph(project, {});
+    for (const n of nodes) {
+      setNodePos(n.id, Math.round(n.position.x), Math.round(n.position.y));
+    }
+  };
+
+  const createFromTemplate = async (templateId: string) => {
+    if (!templateId) return;
+    try {
+      const p = await api.createFromTemplate(templateId);
+      setActiveProject(p.id ?? null);
+      setProjects(await api.listProjects());
+    } catch {
+      /* ignore */
+    }
   };
 
   return (
-    <div className="designer">
-      <div className="designer-toolbar">
-        <select
+    <div className="designer page-fill">
+      <div className="designer-toolbar control-row">
+        <Select
           value={activeProject ?? ""}
-          onChange={(e) => setActiveProject(e.target.value || null)}
-        >
-          <option value="">Select a project…</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-        <button className="btn" onClick={addAgent} disabled={!project || readOnly}>+ Agent</button>
+          onChange={(id) => setActiveProject(id || null)}
+          placeholder={t("designer.selectProject")}
+          options={projects.map((p) => ({ value: p.id, label: p.name }))}
+        />
+        <Select
+          value={agentPick}
+          onChange={(id) => {
+            setAgentPick("");
+            if (id) importFromLibrary(id);
+          }}
+          disabled={!project || readOnly}
+          placeholder={t("agentLibrary.addToProject")}
+          options={libraryAgents
+            .filter((a) => !project?.agents.some((ag) => ag.name === a.name))
+            .map((a) => ({ value: a.id, label: a.name }))}
+        />
+        <button type="button" className="btn" onClick={autoLayout} disabled={!project || readOnly} title="Dagre auto-layout">{t("designer.autoLayout")}</button>
+        <button type="button" className="btn" onClick={undo} disabled={!project || readOnly || undoStack.length === 0} title="Ctrl+Z">{t("designer.undo")}</button>
+        <button type="button" className="btn" onClick={redo} disabled={!project || readOnly || redoStack.length === 0} title="Ctrl+Shift+Z">{t("designer.redo")}</button>
+        <Select
+          value={templatePick}
+          onChange={(id) => {
+            setTemplatePick("");
+            if (id) createFromTemplate(id);
+          }}
+          disabled={readOnly}
+          placeholder={t("designer.template")}
+          options={templates.map((tpl) => ({ value: tpl.id, label: tpl.name }))}
+          aria-label="New project from template"
+        />
         <span className="spacer" />
         <LeaseControl />
         <PresenceBar />
         {status ? <span className="muted">{status}…</span> : null}
         {runtimeActive > 0 ? (
-          <span className="runtime-badge" title="agent run in progress">{runtimeActive} running</span>
+          <span className="runtime-badge" title="agent run in progress">{t("designer.runningBadge", { count: runtimeActive })}</span>
         ) : null}
-        <button className={"btn" + (sessionPanelOpen ? " primary" : "")} onClick={() => setSessionPanelOpen(!sessionPanelOpen)} disabled={!project} title="Session tree on canvas">
-          Session
+        <button type="button" className={"btn" + (sessionPanelOpen ? " btn-primary" : "")} onClick={() => setSessionPanelOpen(!sessionPanelOpen)} disabled={!project} title="Session tree on canvas">
+          {t("designer.session")}
         </button>
-        <button className={"btn" + (dockOpen ? " primary" : "")} onClick={() => setDockOpen((s) => !s)} disabled={!project}>
-          {dockOpen ? "Hide console" : "Run · Copilot · Code"}
+        <button type="button" className={"btn" + (dockOpen ? " btn-primary" : "")} onClick={() => setDockOpen((s) => !s)} disabled={!project}>
+          {dockOpen ? t("designer.hideConsole") : t("designer.showConsole")}
         </button>
       </div>
 
       {!project ? (
-        <div className="designer-empty">Select a project to open it on the visual canvas.</div>
+        <div className="designer-empty">{t("designer.empty")}</div>
       ) : (
         <div className="designer-grid">
           <Palette />
@@ -364,7 +459,7 @@ export function VisualDesigner({ activeProject, setActiveProject }: Props) {
               <ReactFlowProvider>
                 <Canvas />
               </ReactFlowProvider>
-              {status === "applying" ? <div className="canvas-busy">applying…</div> : null}
+              {status === "applying" ? <div className="canvas-busy">{t("designer.applying")}</div> : null}
               <OverlayBadge />
               {sessionPanelOpen ? <SessionTreePanel onClose={() => setSessionPanelOpen(false)} /> : null}
             </div>

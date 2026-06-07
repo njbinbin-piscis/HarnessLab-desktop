@@ -145,10 +145,10 @@ agent-workbench/                # 重写后即 HarnessLab Desktop
 | **P0 桌面骨架** ✅ | 照 openpiscis 起 Tauri v2 壳；移植前端跑通空壳；建 workspace 与 `harnesslab-core`，迁入现有 6 个 `.rs`；删 Python | `tauri dev` 打开窗口、前端加载；`cargo build` 通过；仓库无 `.py` |
 | **P1 模型 + 注册表 + 只读画布** ✅ | `Project/AgentSpec/Topology`(serde) + 统一 registry catalog；command 供数据，画布只读渲染 + 点选 Inspector | 任意 project 正确可视化；catalog 列出 kernel + 自带算法 |
 | **P2 Edit Ops + 双向编辑** ✅ | 事务性 ops 引擎（`ops.rs` 校验/diff/apply，全集 op）+ `rusqlite`(bundled) 存储 + Layout 落库；`apply_ops` 命令带 base_rev 乐观并发、422/409/404 错误负载 | ops/store 单测（合法/非法引用/dry-run/stale rev）；编辑→存→重载一致 |
-| **P3 运行台 + 监控** ✅ | 经 kernel 跑 agent（`runner.rs`：Project→AgentConfig 映射 + AgentEvent→`{kind,agent,text,data,ts}` 翻译）；`run_project` 经 Tauri **Channel** 流式回放；节点 live phase 点亮 + 指标叠加；运行落 `canvas_runs` + Session 树。**单 agent 已通；多 agent 协调留作后续** | 画布跑任务、事件实时点亮、指标回填、历史可回看；无密钥优雅报错 |
+| **P3 运行台 + 监控** ✅ | 经 kernel 跑 agent（`runner.rs`：Project→AgentConfig 映射 + AgentEvent→`{kind,agent,text,data,ts}` 翻译）；`run_project` 经 Tauri **Channel** 流式回放；节点 live phase 点亮 + 指标叠加；运行落 `canvas_runs` + Session 树；**多 agent 协调**（`runner/coordinator.rs`：11 种 coordinator 算法，逐 agent 跑 kernel 并聚合 token/事件） | 画布跑任务、事件实时点亮、指标回填、历史可回看；coordinated 拓扑按 coordinator 编排多 agent；无密钥优雅报错 |
 | **P4 Factory 代码生成** ✅ | 语言中立 IR + python/typescript/rust 发射器（`factory.rs`：自包含 scaffold、离线 mock LLM、coordinator body 逐字移植 + sequential 兜底）；`generate`/`languages` 命令；FactoryPanel 实时多文件预览 | 生成物已落盘逐一验证：Rust `rustc` 全 coordinator 零告警编译并运行、Python `py_compile`+运行、TS `tsc --noEmit` 零错（含 `@types/node`）；3 项 factory 单测 |
-| **P5 Design Copilot** ⬜ | NL→校验 Edit Ops→diff→apply（规则 + 可选 LLM 规划器） | 指令产出合法 ops；diff 可审阅；非法 ops 被拒 |
-| **P6 Market + 打磨** ⬜ | 包安装/打包/签名（ed25519 / HMAC）；自动布局 / 撤销重做 / 模板库 / 键盘流 | 安装本地包、签名校验通过；模板一键起手；undo/redo 正确 |
+| **P5 Design Copilot** ✅ | NL→校验 Edit Ops→diff→preview（`copilot.rs` 规则规划器 + 可选 LLM fallback）；`design_edit` 命令；Dock Copilot 面板 propose→审阅→apply | 规则 planner 7 项单测（add critic / set loop / attach tool / coordinated+debate / scorer / token budget / unmappable）；dry-run preview 含 diff+problems |
+| **P6 Market + 打磨** ✅ | `market/` 包协议（manifest + HMAC/ed25519 签名校验 + 本地 `file:` 源安装）+ lockfile；`market_*` 命令；Palette 合并已安装算法；**模板库**（`templates.rs` 3 套起手 + `create_from_template`）；画布 **Auto layout / Undo·Redo（Ctrl+Z/Y）**；Factory **Download .zip**（原生保存对话框）；**Registry 协议 v1**（[`market-registry-protocol.md`](market-registry-protocol.md)）+ 客户端 HTTPS tarball / git / `registry:` 解析 + catalog 浏览 | 本地包安装/卸载/inspect；registry 索引解析单测；签名校验单测；模板 instantiate 单测；zip PK 头验证 |
 
 **建议起点**：P0 + P1（投入小、视觉冲击大），同时把 P2 的 ops 校验地基打好，为 P5 的 AI Copilot 铺路。
 

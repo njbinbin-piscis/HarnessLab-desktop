@@ -1,6 +1,6 @@
 [package]
 name = "harnesslab-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "HarnessLab Desktop core — project model, ops, registry, experiment, factory, design and market logic (Rust, no Python)."
 autotests = false
@@ -16,7 +16,7 @@ name = "harnesslab-headless"
 path = "src/main.rs"
 
 [dependencies]
-piscis-kernel = { workspace = true }
+harness-rt = { workspace = true }
 serde = { workspace = true }
 serde_yaml = "0.9"
 serde_json = { workspace = true }
@@ -29,6 +29,16 @@ async-trait = { workspace = true }
 
 # Local project/layout persistence (bundled SQLite — no external dll needed).
 rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Factory zip export + market tarball integrity.
+zip = "2"
+sha2 = "0.10"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+hex = "0.4"
+hmac = "0.12"
+tar = "0.4"
+flate2 = "1"
+ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -48,6 +58,10 @@ path = "tests/config_validation.rs"
 [[test]]
 name = "phase3_validation"
 path = "tests/phase3_validation.rs"
+
+[[test]]
+name = "timing_hook"
+path = "tests/timing_hook.rs"
 
 [lints]
 workspace = true

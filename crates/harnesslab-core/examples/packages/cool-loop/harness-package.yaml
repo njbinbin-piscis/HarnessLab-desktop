@@ -1,0 +1,21 @@
+schema_version: "1"
+name: cool-loop
+version: 0.1.0
+type: algorithm
+category: loop
+description: A community-authored loop strategy that nudges concise answers.
+authors:
+  - "HarnessLab examples"
+license: MIT
+keywords:
+  - loop
+  - example
+entrypoint: strategy.py
+params_schema: {}
+runtime:
+  python: ">=3.10"
+  dependencies: []
+compatibility:
+  engine: ">=0.1.0"
+  protocol_version: "1"
+capabilities: []

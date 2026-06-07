@@ -1,15 +1,54 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { useT } from "../i18n/context";
+
+type CatalogEntry = Awaited<ReturnType<typeof api.marketCatalog>>[number];
 
 export function MarketPanel() {
+  const t = useT();
   const [installed, setInstalled] = useState<any[]>([]);
-  const [source, setSource] = useState("file:./examples/packages/cool-loop");
+  const [source, setSource] = useState("");
+  const [registries, setRegistries] = useState<string[]>([]);
+  const [registryDraft, setRegistryDraft] = useState("");
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [inspectResult, setInspectResult] = useState<any | null>(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
+  const [tab, setTab] = useState<"catalog" | "advanced">("catalog");
 
   const refresh = () => api.marketInstalled().then(setInstalled);
-  useEffect(() => { refresh(); }, []);
+
+  const loadCatalog = async () => {
+    try {
+      setCatalog(await api.marketCatalog());
+      setErr("");
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+    api.marketSampleSource().then(setSource).catch(() => {
+      setSource("registry:cool-loop@0.1.0");
+    });
+    api.marketGetRegistries().then((r) => {
+      setRegistries(r);
+      setRegistryDraft(r.join("\n"));
+    }).then(loadCatalog);
+  }, []);
+
+  const saveRegistries = async () => {
+    const urls = registryDraft.split("\n").map((s) => s.trim()).filter(Boolean);
+    try {
+      await api.marketSetRegistries(urls);
+      setRegistries(urls);
+      setMsg(t("market.registriesSaved"));
+      await loadCatalog();
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
 
   const inspect = async () => {
     setErr(""); setMsg(""); setInspectResult(null);
@@ -17,17 +56,17 @@ export function MarketPanel() {
     catch (e) { setErr(String(e)); }
   };
 
-  const install = async (consent = false) => {
+  const install = async (spec: string, consent = false) => {
     setErr(""); setMsg("");
     try {
-      const info = await api.marketInstall(source, consent);
-      setMsg(`Installed ${info.name}@${info.version} (${info.wired})`);
+      const info = await api.marketInstall(spec, consent);
+      setMsg(t("market.installedMsg", { name: info.name, version: info.version, wired: info.wired }));
       refresh();
     } catch (e: any) {
       const m = String(e);
       if (m.includes("needs_consent") || m.includes("capabilities")) {
-        if (confirm("This package requests capabilities. Install anyway?")) {
-          install(true);
+        if (confirm(t("market.consentConfirm"))) {
+          install(spec, true);
           return;
         }
       }
@@ -35,45 +74,110 @@ export function MarketPanel() {
     }
   };
 
+  const installFromCatalog = (entry: CatalogEntry, version?: string) => {
+    const ver = version ?? entry.latest ?? entry.versions[entry.versions.length - 1];
+    const spec = `registry:${entry.name}@${ver}`;
+    setSource(spec);
+    install(spec, false);
+  };
+
   return (
-    <div className="panel">
-      <h2>Community Market</h2>
-      <p className="muted">
-        Decentralized: install algorithms or datasets from a git repo, URL tarball, or local path.
-        Integrity is verified; declared capabilities require consent.
-      </p>
-      <label>Source spec</label>
-      <input value={source} onChange={(e) => setSource(e.target.value)}
-        placeholder="git+https://host/repo.git#tag | https://host/pkg.tar.gz | file:./path" />
-      <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-        <button className="ghost" onClick={inspect}>Inspect</button>
-        <button className="primary" onClick={() => install(false)}>Install</button>
+    <div className="panel panel-stack page-fill">
+      <h2>{t("market.title")}</h2>
+      <p className="muted panel-intro">{t("market.intro")}</p>
+
+      <div className="seg panel-intro" style={{ marginBottom: 12 }}>
+        <button type="button" className={tab === "catalog" ? "active" : ""} onClick={() => setTab("catalog")}>{t("market.catalog")}</button>
+        <button type="button" className={tab === "advanced" ? "active" : ""} onClick={() => setTab("advanced")}>{t("market.advanced")}</button>
       </div>
-      {msg && <div className="muted" style={{ marginTop: 8 }}>{msg}</div>}
-      {err && <div className="err">{err}</div>}
 
-      {inspectResult && (
-        <div style={{ marginTop: 12 }}>
-          <h3>Manifest</h3>
-          <div className="code">{JSON.stringify(inspectResult.manifest, null, 2)}</div>
-          {inspectResult.problems?.length > 0 && (
-            <div className="err">problems: {inspectResult.problems.join("; ")}</div>
-          )}
+      <div className="panel-body-scroll">
+        {tab === "catalog" && (
+          <>
+            <h3>{t("market.registryIndexes")}</h3>
+            <textarea
+              rows={3}
+              value={registryDraft}
+              onChange={(e) => setRegistryDraft(e.target.value)}
+              placeholder={t("market.registryPlaceholder")}
+              style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }}
+            />
+            <div className="panel-actions" style={{ marginTop: 8 }}>
+              <button type="button" className="btn" onClick={saveRegistries}>{t("market.saveRegistries")}</button>
+              <button type="button" className="btn" onClick={loadCatalog}>{t("market.refreshCatalog")}</button>
+            </div>
+            {registries.length === 0 && (
+              <p className="muted" style={{ marginTop: 8 }}>{t("market.noRegistries")}</p>
+            )}
+
+            <h3 style={{ marginTop: 16 }}>{t("market.availablePackages")}</h3>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr><th>{t("market.registry")}</th><th>{t("common.name")}</th><th>{t("market.latest")}</th><th>{t("market.type")}</th><th>{t("common.description")}</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {catalog.map((e) => (
+                    <tr key={`${e.registry}:${e.name}`}>
+                      <td>{e.registry}</td>
+                      <td>{e.name}</td>
+                      <td>{e.latest ?? t("common.dash")}</td>
+                      <td>{e.type ?? e.category ?? t("common.dash")}</td>
+                      <td>{e.description ?? t("common.dash")}</td>
+                      <td>
+                        <button type="button" className="btn btn-sm btn-primary" onClick={() => installFromCatalog(e)}>{t("common.install")}</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {catalog.length === 0 && registries.length > 0 && (
+              <p className="muted">{t("market.noPackages")}</p>
+            )}
+          </>
+        )}
+
+        {tab === "advanced" && (
+          <>
+            <label>{t("market.sourceSpec")}</label>
+            <input value={source} onChange={(e) => setSource(e.target.value)}
+              placeholder={t("market.sourcePlaceholder")} />
+            <div className="panel-actions">
+              <button type="button" className="btn" onClick={inspect}>{t("common.inspect")}</button>
+              <button type="button" className="btn btn-primary" onClick={() => install(source, false)}>{t("common.install")}</button>
+            </div>
+          </>
+        )}
+
+        {msg && <div className="muted" style={{ marginTop: 8 }}>{msg}</div>}
+        {err && <div className="err">{err}</div>}
+
+        {inspectResult && (
+          <div style={{ marginTop: 12 }}>
+            <h3>{t("market.manifest")}</h3>
+            <div className="code code-in-panel">{JSON.stringify(inspectResult.manifest, null, 2)}</div>
+            {inspectResult.problems?.length > 0 && (
+              <div className="err">problems: {inspectResult.problems.join("; ")}</div>
+            )}
+          </div>
+        )}
+
+        <h3>{t("market.installed")}</h3>
+        <div className="table-scroll">
+          <table>
+            <thead><tr><th>{t("common.name")}</th><th>version</th><th>{t("market.type")}</th><th>{t("market.category")}</th><th></th></tr></thead>
+            <tbody>
+              {installed.map((p) => (
+                <tr key={p.name}>
+                  <td>{p.name}</td><td>{p.version}</td><td>{p.type}</td><td>{p.category}</td>
+                  <td><button type="button" className="btn btn-sm" onClick={() => api.marketUninstall(p.name).then(refresh)}>{t("common.remove")}</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
-
-      <h3>Installed packages</h3>
-      <table>
-        <thead><tr><th>name</th><th>version</th><th>type</th><th>category</th><th></th></tr></thead>
-        <tbody>
-          {installed.map((p) => (
-            <tr key={p.name}>
-              <td>{p.name}</td><td>{p.version}</td><td>{p.type}</td><td>{p.category}</td>
-              <td><button className="ghost" onClick={() => api.marketUninstall(p.name).then(refresh)}>remove</button></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      </div>
     </div>
   );
 }

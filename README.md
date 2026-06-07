@@ -32,27 +32,13 @@ the same rev as `openpiscis` / `AgentZ` (see the workspace `Cargo.toml`).
 
 ## Status
 
-**P0–P4 — done.** Cargo workspace + Tauri v2 shell loading the ported HarnessLab
-frontend, `harnesslab-core` linking `piscis-kernel`, all Python removed (P0); the
-`Project`/`AgentSpec`/`Topology` serde models, the component/tool registry and a
-read-only canvas wired over IPC (P1); and a transactional **Edit-Ops engine**
-(`ops.rs`: validate/diff/apply, all-or-nothing) backed by a bundled-SQLite store
-(`rusqlite`) that persists projects + canvas layout, with an `apply_ops` command
-doing `base_rev` optimistic-concurrency and 422/409/404 error payloads — the
-canvas is now bidirectionally editable (P2); a live **run console** (P3) that
-executes the project's primary agent over `piscis-kernel`, maps the visual
-`AgentSpec` to a harness config, streams translated engine events to the canvas
-over a Tauri **IPC channel** (lighting up nodes + overlaying per-agent metrics),
-and persists each run to a `canvas_runs` history + session tree (credentials from
-`PISCIS_API_KEY` / `PISCIS_PROVIDER` / `PISCIS_BASE_URL`; multi-agent coordination
-is the remaining P3 sub-item); and a **Factory codegen** path (P4) — `factory.rs`
-builds a language-neutral IR from a project and emits a self-contained,
-offline-runnable multi-agent codebase in **Python / TypeScript / Rust** (per-target
-LLM client + verbatim-ported coordinator bodies with a sequential fallback), served
-by `generate`/`languages` commands and previewed file-by-file in the Factory panel.
-The generated output is verified to `rustc`-compile (warning-clean across every
-coordinator), `py_compile` + run, and `tsc --noEmit`-typecheck. Subsequent phases
-(P5–P6) add the AI design copilot and the market. See the roadmap in
+**P0–P6 — done.** Cargo workspace + Tauri v2 shell loading the ported HarnessLab
+frontend through P5 (models, Edit-Ops, SQLite, run console with multi-agent
+coordination, Factory codegen, Design Copilot). **P6** adds the decentralized
+**Market** (local package install with integrity + HMAC/ed25519 signatures,
+palette merge), **Registry protocol v1** ([`docs/market-registry-protocol.md`](docs/market-registry-protocol.md) —
+HTTPS tarball / git / `registry:` catalog for future cloud markets), **project templates**, canvas **auto-layout** and **undo/redo**,
+and Factory **.zip download** via the native save dialog. See
 `docs/desktop-rewrite-plan.md`.
 
 ## Develop

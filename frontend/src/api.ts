@@ -5,6 +5,7 @@
 // or reject with a clear "coming in P<n>" message.
 
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { t } from "./i18n/index";
 
 /** True when running inside the Tauri webview (vs. a plain browser). */
 export function isDesktop(): boolean {
@@ -25,6 +26,75 @@ export interface ComponentReference {
   name: string;
   languages: string[];
   snippets: Record<string, string>;
+}
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  platform: string;
+  category: string;
+}
+
+export interface ClawHubSkill {
+  slug: string;
+  name: string;
+  description: string;
+  version: string;
+  stars: number;
+  tags: string[];
+}
+
+export interface InstalledSkill {
+  slug: string;
+  name: string;
+  description: string;
+  version: string;
+  content: string;
+  enabled: boolean;
+  installed_at: number;
+}
+
+export interface EvalTaskResult {
+  task_id: string;
+  score: number;
+  prediction: string;
+  expected: string;
+  latency_s?: number;
+  est_tokens?: number;
+  error?: string | null;
+}
+
+export interface EvalRun {
+  id: string;
+  project_id: string;
+  project_name: string;
+  dataset: string;
+  scorer: string;
+  accuracy: number;
+  task_results: EvalTaskResult[];
+  metrics: { avg_latency: number; total_est_tokens: number };
+  created_at: number;
+}
+
+export interface DeclarativeAlgorithm {
+  kind: string;
+  name: string;
+  description?: string;
+  addendum: string;
+  reflective?: boolean;
+  max_iterations?: number | null;
+}
+
+export interface EvalRunSummary {
+  id: string;
+  project_id: string;
+  project_name: string;
+  dataset: string;
+  scorer: string;
+  accuracy: number;
+  avg_latency: number;
+  total_est_tokens: number;
+  created_at: number;
 }
 
 export type Ref = { name: string; params?: Record<string, unknown> } | null;
@@ -53,7 +123,6 @@ export interface AgentSpec {
   compaction?: Ref;
   memory?: Ref;
   context?: Ref;
-  // harness lifecycle stages (empty by default)
   credentials?: Ref;
   capabilities?: Ref;
   skills?: Ref;
@@ -64,6 +133,27 @@ export interface AgentSpec {
   session?: Ref;
   tracing?: Ref;
 }
+
+export interface LibraryAgent {
+  id: string;
+  name: string;
+  description?: string;
+  spec: AgentSpec;
+  created_at?: number;
+  updated_at?: number;
+}
+
+export interface LibraryAgentSummary {
+  id: string;
+  name: string;
+  description: string;
+  model: string;
+}
+
+export type LibraryRunMsg =
+  | { type: "event"; event: { kind: string; agent: string; text: string; data?: unknown; ts: number } }
+  | { type: "result"; result: string; total_tokens: number }
+  | { type: "error"; message: string };
 
 export type EditOp = Record<string, unknown>;
 
@@ -204,7 +294,7 @@ export interface Topology {
 
 // Reject helper for endpoints not yet wired in the current phase.
 function comingSoon<T>(phase: string, feature: string): Promise<T> {
-  return Promise.reject(new ApiError(501, `${feature} 将在 ${phase} 提供`));
+  return Promise.reject(new ApiError(501, t("errors.comingSoon", { feature, phase })));
 }
 
 const EMPTY_COLLAB: CollabState = {
@@ -218,7 +308,7 @@ const EMPTY_COLLAB: CollabState = {
 export const api = {
   // ── Registry / catalog (P1) ───────────────────────────────────────────────
   catalog: () => invoke<Record<string, ComponentSpec[]>>("registry_catalog"),
-  tools: () => invoke<{ tools: { name: string; description: string }[] }>("registry_tools"),
+  tools: () => invoke<{ tools: ToolSpec[] }>("registry_tools"),
   componentReference: (kind: string, name: string) =>
     invoke<ComponentReference>("component_reference", { kind, name }),
   reloadLibrary: () => Promise.resolve({}),
@@ -290,19 +380,26 @@ export const api = {
   collabWsUrl: (_id: string, _clientId: string, _name: string) => "",
 
   // ── Design / Copilot (P5) ─────────────────────────────────────────────────
-  designEdit: (_projectId: string, _instruction: string) =>
-    comingSoon<EditProposal>("P5", "AI Copilot"),
-  design: (_request: string) => comingSoon<{ source: string; project: Project }>("P5", "Design Assistant"),
+  designEdit: (projectId: string, instruction: string) =>
+    invoke<EditProposal>("design_edit", { id: projectId, instruction }),
+  design: (_request: string) => comingSoon<{ source: string; project: Project }>("P5", t("nav.design")),
   authorComponent: (_kind: string, _name: string, _description: string) =>
-    comingSoon("P5", "组件创作"),
+    comingSoon("P5", t("errors.componentAuthor")),
 
-  // ── Datasets / experiments (P3+) ──────────────────────────────────────────
+  // ── Datasets / experiments ────────────────────────────────────────────────
   listDatasets: () =>
-    Promise.resolve([] as { id: string; scorer: string; num_tasks: number; source: string }[]),
-  evalRun: (_projectId: string, _datasetId: string) => comingSoon<any>("P3", "评测运行"),
-  listRuns: (_projectId?: string) => Promise.resolve([] as any[]),
-  getRun: (id: string) => comingSoon<any>("P3", `运行 ${id}`),
-  leaderboard: (_datasetId?: string, _limit = 20) => Promise.resolve([] as any[]),
+    invoke<{ datasets: { id: string; scorer: string; num_tasks: number; source: string }[] }>(
+      "list_datasets",
+    ).then((r) => r.datasets),
+  evalRun: (projectId: string, datasetId: string) =>
+    invoke<EvalRunSummary>("run_eval", { projectId, datasetId }),
+  listRuns: (projectId?: string) =>
+    invoke<{ runs: EvalRunSummary[] }>("list_eval_runs", { projectId: projectId ?? null }).then(
+      (r) => r.runs,
+    ),
+  getRun: (id: string) => invoke<EvalRun>("get_eval_run", { id }),
+  leaderboard: (_datasetId?: string, limit = 20) =>
+    invoke<{ entries: EvalRunSummary[] }>("eval_leaderboard", { limit }).then((r) => r.entries),
 
   // ── Factory codegen (P4) ──────────────────────────────────────────────────
   languages: () => invoke<{ languages: string[] }>("languages"),
@@ -312,8 +409,23 @@ export const api = {
       language,
       options,
     }),
+  downloadFactoryZip: (
+    projectId: string,
+    language: string,
+    options: Record<string, unknown> = {},
+  ) =>
+    invoke<string | null>("download_factory_zip", {
+      id: projectId,
+      language,
+      options,
+    }),
 
-  // ── Embeddings / market (later) ───────────────────────────────────────────
+  // ── Templates (P6) ────────────────────────────────────────────────────────
+  listTemplates: () => invoke<{ templates: { id: string; name: string; description: string }[] }>("list_templates"),
+  createFromTemplate: (templateId: string, name?: string) =>
+    invoke<Project>("create_from_template", { templateId, name: name ?? null }),
+
+  // ── Embeddings / market (P6) ──────────────────────────────────────────────
   embeddingStatus: (_probe = false) =>
     Promise.resolve<{
       backends: string[];
@@ -322,9 +434,68 @@ export const api = {
       model: string;
       probe?: { ok: boolean; dim?: number; note?: string; reason?: string };
     }>({ backends: ["bow", "hashing"], api_configured: false, base_url: "", model: "" }),
-  marketInstalled: () => Promise.resolve([] as any[]),
-  marketInspect: (_source: string) => comingSoon<any>("P6", "市场检视"),
-  marketInstall: (_source: string, _consent = false) => comingSoon<any>("P6", "市场安装"),
-  marketUninstall: (_name: string) => comingSoon("P6", "市场卸载"),
-  downloadUrl: "",
+  marketInstalled: () => invoke<{ packages: { name: string; version: string; type: string; category: string; source: string; installed_at: number }[] }>("market_installed").then((r) => r.packages),
+  marketSampleSource: () => invoke<string>("market_sample_source"),
+  marketInspect: (source: string) =>
+    invoke<{ manifest: Record<string, unknown>; problems: string[] }>("market_inspect", { source }),
+  marketInstall: (source: string, consent = false, verifySignature = false) =>
+    invoke<{ name: string; version: string; type: string; category: string; wired: string; signature: string; capabilities: string[] }>(
+      "market_install",
+      { source, consentCapabilities: consent, verifySignature },
+    ),
+  marketUninstall: (name: string) => invoke<void>("market_uninstall", { name }),
+  marketGetRegistries: () =>
+    invoke<{ registries: string[] }>("market_get_registries").then((r) => r.registries),
+  marketSetRegistries: (registries: string[]) =>
+    invoke<void>("market_set_registries", { registries }),
+  marketCatalog: () =>
+    invoke<{
+      entries: {
+        registry: string;
+        registry_url: string;
+        name: string;
+        latest?: string;
+        description?: string;
+        type?: string;
+        category?: string;
+        keywords: string[];
+        versions: string[];
+      }[];
+    }>("market_catalog").then((r) => r.entries),
+
+  // ── Agent library ─────────────────────────────────────────────────────────
+  listLibraryAgents: () =>
+    invoke<{ agents: LibraryAgentSummary[] }>("list_library_agents").then((r) => r.agents),
+  getLibraryAgent: (id: string) => invoke<LibraryAgent | null>("get_library_agent", { id }),
+  createLibraryAgent: (agent: LibraryAgent) =>
+    invoke<LibraryAgent>("create_library_agent", { agent }),
+  updateLibraryAgent: (id: string, agent: LibraryAgent) =>
+    invoke<LibraryAgent | null>("update_library_agent", { id, agent }),
+  deleteLibraryAgent: (id: string) => invoke<boolean>("delete_library_agent", { id }),
+  runLibraryAgentChannel: (id: string, task: string, onMsg: (msg: LibraryRunMsg) => void) => {
+    const channel = new Channel<LibraryRunMsg>();
+    channel.onmessage = onMsg;
+    return invoke<void>("run_library_agent", { id, task, onEvent: channel });
+  },
+
+  // ── Skill library (ClawHub) ───────────────────────────────────────────────
+  clawhubSearch: (query: string, limit = 20) =>
+    invoke<{ items: ClawHubSkill[]; total: number; query: string }>("clawhub_search", {
+      query,
+      limit,
+    }),
+  clawhubInstall: (slug: string, version?: string) =>
+    invoke<InstalledSkill>("clawhub_install", { slug, version: version ?? null }),
+  listSkills: () =>
+    invoke<{ skills: InstalledSkill[] }>("list_skills").then((r) => r.skills),
+  uninstallSkill: (slug: string) => invoke<boolean>("uninstall_skill", { slug }),
+  setSkillEnabled: (slug: string, enabled: boolean) =>
+    invoke<InstalledSkill | null>("set_skill_enabled", { slug, enabled }),
+
+  // ── Declarative algorithm registry (meta-agent) ───────────────────────────
+  registerAlgorithm: (algorithm: DeclarativeAlgorithm) =>
+    invoke<DeclarativeAlgorithm>("register_algorithm", { algorithm }),
+  listAlgorithms: () =>
+    invoke<{ algorithms: DeclarativeAlgorithm[] }>("list_algorithms").then((r) => r.algorithms),
+  deleteAlgorithm: (name: string) => invoke<boolean>("delete_algorithm", { name }),
 };

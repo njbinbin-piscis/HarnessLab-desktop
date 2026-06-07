@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use piscis_kernel::agent::hooks::{AgentHooks, ContextHookEvent, HookDecision, ToolHookEvent};
-use piscis_kernel::agent::tool::ToolResult;
+use harness_rt::agent::hooks::{AgentHooks, ContextHookEvent, HookDecision, ToolHookEvent};
+use harness_rt::agent::tool::ToolResult;
 
 /// Performance metrics tracked by the evolution hook.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -76,8 +76,8 @@ mod tests {
 
     #[test]
     fn test_load_react_config() {
-        let config =
-            load_config(&workspace_path("configs/react_agent.yaml")).expect("Failed to load react config");
+        let config = load_config(&workspace_path("configs/react_agent.yaml"))
+            .expect("Failed to load react config");
         assert_eq!(config.agent.name, "ReAct-Explorer");
         assert_eq!(config.strategy.strategy_type, "react");
     }

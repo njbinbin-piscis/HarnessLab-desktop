@@ -1,16 +1,16 @@
 # HarnessLab Desktop — Cargo workspace.
 #
 # Members:
+#   crates/harness-rt       — native agent runtime (LLM clients, agent loop,
+#                             tools, memory, compaction, context, policy).
 #   crates/harnesslab-core  — project model / ops / registry / experiment /
 #                             factory / design / market logic + headless CLI.
 #   src-tauri               — the Tauri v2 desktop shell (commands + events).
 #
-# The agent runtime is consumed from the standalone `piscis-engine` repo as a
-# git dependency (rev pinned below, shared with openpiscis / AgentZ). For local
-# engine hacking, add a `[patch."https://github.com/njbinbin-piscis/piscis-engine.git"]`
-# section pointing the crates at a sibling `../piscis-engine` checkout.
+# The agent runtime is now owned in-tree (crates/harness-rt); the workbench no
+# longer depends on the external `piscis-engine` repo.
 [workspace]
-members = ["crates/harnesslab-core", "src-tauri"]
+members = ["crates/harnesslab-core", "crates/harness-rt", "src-tauri"]
 resolver = "2"
 
 [workspace.lints.rust]
@@ -33,12 +33,12 @@ anyhow = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
 
-# Shared agent runtime — pin rev across openpiscis, AgentZ, agent-workbench (v0.8.47).
-piscis-kernel = { git = "https://github.com/njbinbin-piscis/piscis-engine.git", package = "piscis-kernel", rev = "v0.8.47" }
+# Native agent runtime — replaces the former external `piscis-kernel` git dep.
+# Lives in-tree at crates/harness-rt so the workbench owns its kernel.
+harness-rt = { path = "crates/harness-rt" }
 
-# Local engine hacking — uncomment and comment out the git dep above:
-# [patch."https://github.com/njbinbin-piscis/piscis-engine.git"]
-# piscis-kernel = { path = "../piscis-engine/piscis-kernel" }
+# HTTP client for the native LLM clients + neutral network tools.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [profile.dev]
 incremental = true

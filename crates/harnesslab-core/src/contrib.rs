@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use piscis_kernel::agent::contrib;
-use piscis_kernel::agent::loop_strategy::{LoopStrategy, PromptPatternStrategy};
+use harness_rt::agent::contrib;
+use harness_rt::agent::loop_strategy::{LoopStrategy, PromptPatternStrategy};
 
 /// Install every contributed strategy into the kernel contrib registry.
 ///
@@ -57,7 +57,7 @@ fn register_generated() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use piscis_kernel::agent::loop_strategy::resolve_loop_strategy;
+    use harness_rt::agent::loop_strategy::resolve_loop_strategy;
 
     #[test]
     fn register_all_installs_contributed_strategies() {

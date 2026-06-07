@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "registry": "harnesslab-examples",
+  "description": "Bundled example registry for local development. Production markets publish the same schema over HTTPS.",
+  "updated_at": "2026-06-07T00:00:00Z",
+  "homepage": "https://github.com/njbinbin-piscis/pisci/tree/main/agent-workbench/crates/harnesslab-core/examples",
+  "packages": {
+    "cool-loop": {
+      "latest": "0.1.0",
+      "type": "algorithm",
+      "category": "loop",
+      "description": "A community-authored loop strategy that nudges concise answers.",
+      "keywords": ["loop", "example"],
+      "authors": ["HarnessLab examples"],
+      "license": "MIT",
+      "versions": {
+        "0.1.0": "file:../packages/cool-loop"
+      }
+    }
+  }
+}

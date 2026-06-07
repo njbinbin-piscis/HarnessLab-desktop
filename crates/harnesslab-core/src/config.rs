@@ -64,10 +64,9 @@ pub struct AgentConfig {
 
 /// Context-compaction algorithm configuration.
 ///
-/// Selects which [`CompactionStrategy`] the kernel uses to shrink the
-/// conversation before each LLM call.
-///
-/// [`CompactionStrategy`]: piscis_kernel::agent::compaction_strategy::CompactionStrategy
+/// Selects which compaction strategy the runtime uses to shrink the
+/// conversation before each LLM call (see
+/// `harness_rt::agent::compaction::CompactionStrategy`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressionConfig {
     /// Strategy identifier. Supported values:

@@ -5,20 +5,20 @@
 
 use std::sync::Arc;
 
-use piscis_kernel::agent::harness::config::{CompactionSettings, ConfirmFlags};
-use piscis_kernel::agent::harness::{HarnessConfig, LayeredPrompt};
-use piscis_kernel::agent::loop_::resolve_compaction_strategy;
-use piscis_kernel::agent::loop_strategy::resolve_loop_strategy;
-use piscis_kernel::agent::tool::ToolRegistry;
-use piscis_kernel::memory::plugin::{InMemoryVectorStore, MemoryPlugin};
-use piscis_kernel::policy::PolicyGate;
+use harness_rt::agent::harness::config::{CompactionSettings, ConfirmFlags};
+use harness_rt::agent::harness::{HarnessConfig, LayeredPrompt};
+use harness_rt::agent::loop_::resolve_compaction_strategy;
+use harness_rt::agent::loop_strategy::resolve_loop_strategy;
+use harness_rt::agent::tool::ToolRegistry;
+use harness_rt::memory::plugin::{InMemoryVectorStore, MemoryPlugin, SqliteMemory};
+use harness_rt::policy::PolicyGate;
 
 use crate::config::AgentConfig;
 use crate::context_managers::{
     DynamicContextManager, KernelContextAdapter, ProjectContextManager, WorkspaceRootManager,
 };
 use crate::hooks::WorkbenchHooks;
-use crate::plugins::ContextManager;
+use crate::plugins::{ContextManager, NoOpContextManager};
 
 /// Error type for configuration loading failures.
 #[derive(Debug, thiserror::Error)]
@@ -105,7 +105,7 @@ pub fn build_harness_config(
     // Resolve the kernel-side context manager (drives runtime context injection)
     // and the optional long-term memory backend.
     let context_manager = resolve_kernel_context_manager(&plugins.context)?;
-    let memory_plugin = resolve_memory_plugin(&plugins.memory)?;
+    let memory_plugin = resolve_memory_plugin(&plugins.memory, project_dir)?;
 
     // Resolve the loop-control strategy from `strategy.type`.
     let loop_strategy =
@@ -124,10 +124,17 @@ pub fn build_harness_config(
         agent_config.strategy.system_prompt_template.clone()
     };
 
+    // Inject installed ClawHub skills (SKILL.md instruction blocks) as extra
+    // prompt layers so every agent run can use the user's installed skills.
+    let mut prompt = LayeredPrompt::from_monolithic(base_prompt);
+    for block in crate::skills::active_blocks() {
+        prompt.push_layer(block);
+    }
+
     // Start building the harness config using the builder pattern.
     let mut builder = HarnessConfig::builder("workbench", &agent.model, registry, policy)
         .with_fallback_models(agent.fallback_models.clone())
-        .with_layered_prompt(LayeredPrompt::from_monolithic(base_prompt))
+        .with_layered_prompt(prompt)
         .with_max_tokens(agent.max_tokens)
         .with_context_window(agent.context_window)
         .with_confirm_flags(confirm_flags)
@@ -203,6 +210,7 @@ pub fn resolve_context_manager(name: &str) -> Result<Box<dyn ContextManager>, Co
         "ProjectContextManager" => Ok(Box::new(ProjectContextManager)),
         "WorkspaceRootManager" => Ok(Box::new(WorkspaceRootManager)),
         "DynamicContextManager" => Ok(Box::new(DynamicContextManager)),
+        "NoOpContextManager" => Ok(Box::new(NoOpContextManager)),
         other => Err(ConfigLoadError::UnknownContextManager(other.to_string())),
     }
 }
@@ -213,7 +221,7 @@ pub fn resolve_context_manager(name: &str) -> Result<Box<dyn ContextManager>, Co
 /// kernel drives runtime injection.
 pub fn resolve_kernel_context_manager(
     name: &str,
-) -> Result<Arc<dyn piscis_kernel::context::ContextManager>, ConfigLoadError> {
+) -> Result<Arc<dyn harness_rt::context::ContextManager>, ConfigLoadError> {
     let inner = resolve_context_manager(name)?;
     Ok(Arc::new(KernelContextAdapter::new(name, inner)))
 }
@@ -224,20 +232,33 @@ pub fn resolve_kernel_context_manager(
 /// `InMemoryVectorStore` / `SqliteMemory` resolve to a concrete store.
 /// `SqliteMemory` currently falls back to the in-memory store (persistent
 /// backend WIP). Unknown identifiers fail loudly.
-pub fn resolve_memory_plugin(name: &str) -> Result<Option<Arc<dyn MemoryPlugin>>, ConfigLoadError> {
+pub fn resolve_memory_plugin(
+    name: &str,
+    project_dir: Option<&std::path::Path>,
+) -> Result<Option<Arc<dyn MemoryPlugin>>, ConfigLoadError> {
     match name {
         "NoOpMemory" => Ok(None),
         "InMemoryVectorStore" => Ok(Some(Arc::new(InMemoryVectorStore::new()))),
-        // Persistent SQLite backend is not implemented yet; fall back to the
-        // session-scoped in-memory store so the slot is still functional.
-        "SqliteMemory" => Ok(Some(Arc::new(InMemoryVectorStore::new()))),
+        // Persistent backend: store under `<project>/.pisci/memory.db` so
+        // memories survive across runs. When no project dir is known (e.g.
+        // config validation), fall back to a session-scoped in-memory store.
+        "SqliteMemory" => match project_dir {
+            Some(dir) => {
+                let path = dir.join(".pisci").join("memory.db");
+                let store = SqliteMemory::open(&path).map_err(|e| {
+                    ConfigLoadError::InvalidConfig(format!("sqlite memory backend: {e}"))
+                })?;
+                Ok(Some(Arc::new(store)))
+            }
+            None => Ok(Some(Arc::new(InMemoryVectorStore::new()))),
+        },
         other => Err(ConfigLoadError::UnknownMemoryPlugin(other.to_string())),
     }
 }
 
 /// Validate that a memory-plugin identifier is one the workbench understands.
 pub fn validate_memory_plugin(name: &str) -> Result<(), ConfigLoadError> {
-    resolve_memory_plugin(name).map(|_| ())
+    resolve_memory_plugin(name, None).map(|_| ())
 }
 
 /// Load an agent configuration from a YAML file and build a `HarnessConfig`.
@@ -340,15 +361,17 @@ plugins:
     #[test]
     fn test_memory_plugin_resolution() {
         // NoOpMemory => no plugin wired (behaviour-preserving default path).
-        assert!(resolve_memory_plugin("NoOpMemory").unwrap().is_none());
+        assert!(resolve_memory_plugin("NoOpMemory", None).unwrap().is_none());
         // Concrete stores resolve to Some.
-        assert!(resolve_memory_plugin("InMemoryVectorStore")
+        assert!(resolve_memory_plugin("InMemoryVectorStore", None)
             .unwrap()
             .is_some());
-        assert!(resolve_memory_plugin("SqliteMemory").unwrap().is_some());
+        assert!(resolve_memory_plugin("SqliteMemory", None)
+            .unwrap()
+            .is_some());
         // Unknown identifiers fail loudly.
         assert!(matches!(
-            resolve_memory_plugin("Nonsense"),
+            resolve_memory_plugin("Nonsense", None),
             Err(ConfigLoadError::UnknownMemoryPlugin(_))
         ));
     }

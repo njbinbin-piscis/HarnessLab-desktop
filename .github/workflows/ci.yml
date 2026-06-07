@@ -22,35 +22,24 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf
+
       - name: Format check
         run: cargo fmt --check
 
       - name: Tests
         run: cargo test
 
-      - name: Build CLI
-        run: cargo build --bin agent-workbench
+      - name: Build headless CLI
+        run: cargo build -p harnesslab-core --bin harnesslab-headless --release
 
-  python:
-    name: Python (pytest)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Pytest
-        run: python -m pytest tests -q
+      - name: Build desktop crate
+        run: cargo build -p harnesslab-desktop --release
 
   frontend:
     name: Frontend (build)

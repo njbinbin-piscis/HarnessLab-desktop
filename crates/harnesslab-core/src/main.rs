@@ -27,14 +27,14 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use harness_rt::agent::loop_::AgentLoop;
+use harness_rt::agent::messages::AgentEvent;
+use harness_rt::agent::tool::{ToolContext, ToolRegistry, ToolSettings};
+use harness_rt::llm::{build_client_with_timeout, LlmMessage, MessageContent};
+use harness_rt::policy::PolicyGate;
+use harness_rt::tools::{register_neutral_into, NeutralToolsConfig};
 use harnesslab_core::config::AgentConfig;
 use harnesslab_core::loader::build_harness_config;
-use piscis_kernel::agent::loop_::AgentLoop;
-use piscis_kernel::agent::messages::AgentEvent;
-use piscis_kernel::agent::tool::{ToolContext, ToolRegistry, ToolSettings};
-use piscis_kernel::llm::{build_client_with_timeout, LlmMessage, MessageContent};
-use piscis_kernel::policy::PolicyGate;
-use piscis_kernel::tools::{register_neutral_into, NeutralToolsConfig};
 use tokio::sync::mpsc::Sender;
 
 const HELP: &str = "\

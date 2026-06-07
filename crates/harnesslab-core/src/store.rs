@@ -12,10 +12,15 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agent_library::{sample_library_agents, LibraryAgent, LibraryAgentSummary};
 use crate::ops::{apply_ops as ops_apply_ops, diff_projects};
 use crate::project::{new_id, now_secs, AgentSpec, ComponentRef, Project, Topology};
+use harness_rt::agent::declarative::DeclarativeAlgorithm;
+
+use crate::eval::{EvalRun, EvalRunSummary};
 use crate::registry;
 use crate::runner::NodeMetrics;
+use crate::skills::InstalledSkill;
 
 /// A node position on the canvas.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -101,9 +106,14 @@ pub struct SessionTree {
 pub enum OpsError {
     NotFound,
     /// `base_rev` did not match the stored revision (a stale edit).
-    Stale { current_rev: u64, project: Project },
+    Stale {
+        current_rev: u64,
+        project: Project,
+    },
     /// One or more ops failed validation (nothing applied).
-    Invalid { problems: Vec<String> },
+    Invalid {
+        problems: Vec<String>,
+    },
 }
 
 pub struct Store {
@@ -146,17 +156,51 @@ impl Store {
                  data       TEXT NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_runs_project
-                 ON canvas_runs (project_id, created_at DESC);",
+                 ON canvas_runs (project_id, created_at DESC);
+             CREATE TABLE IF NOT EXISTS library_agents (
+                 id         TEXT PRIMARY KEY,
+                 name       TEXT NOT NULL,
+                 data       TEXT NOT NULL,
+                 updated_at REAL NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS skills (
+                 slug         TEXT PRIMARY KEY,
+                 name         TEXT NOT NULL,
+                 data         TEXT NOT NULL,
+                 installed_at REAL NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS eval_runs (
+                 id         TEXT PRIMARY KEY,
+                 project_id TEXT NOT NULL,
+                 created_at REAL NOT NULL,
+                 data       TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_evals_project
+                 ON eval_runs (project_id, created_at DESC);
+             CREATE TABLE IF NOT EXISTS algorithms (
+                 name       TEXT PRIMARY KEY,
+                 kind       TEXT NOT NULL,
+                 data       TEXT NOT NULL,
+                 created_at REAL NOT NULL
+             );",
         )
     }
 
-    /// Seed a sample project the first time the store is empty.
+    /// Seed sample project + library agents the first time the store is empty.
     pub fn seed_if_empty(&self) -> rusqlite::Result<()> {
-        let count: i64 =
-            self.conn
-                .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?;
         if count == 0 {
             self.put_project(&sample_project())?;
+        }
+        let lib_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM library_agents", [], |r| r.get(0))?;
+        if lib_count == 0 {
+            for agent in sample_library_agents() {
+                let _ = self.put_library_agent(&agent);
+            }
         }
         Ok(())
     }
@@ -194,7 +238,9 @@ impl Store {
     pub fn get_project(&self, id: &str) -> Option<Project> {
         let data: Option<String> = self
             .conn
-            .query_row("SELECT data FROM projects WHERE id = ?1", [id], |r| r.get(0))
+            .query_row("SELECT data FROM projects WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
             .optional()
             .ok()
             .flatten();
@@ -230,12 +276,248 @@ impl Store {
             .unwrap_or(false)
     }
 
+    // ── Agent library ─────────────────────────────────────────────────────────
+
+    fn put_library_agent(&self, agent: &LibraryAgent) -> rusqlite::Result<()> {
+        let data = serde_json::to_string(agent).expect("serialize library agent");
+        self.conn.execute(
+            "INSERT INTO library_agents (id, name, data, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, data = ?3, updated_at = ?4",
+            rusqlite::params![agent.id, agent.name, data, agent.updated_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_library_agents(&self) -> Vec<LibraryAgentSummary> {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT data FROM library_agents ORDER BY updated_at DESC")
+        {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .map(|rows| {
+                rows.filter_map(|row| row.ok())
+                    .filter_map(|d| serde_json::from_str::<LibraryAgent>(&d).ok())
+                    .map(|a| a.summary())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn get_library_agent(&self, id: &str) -> Option<LibraryAgent> {
+        let data: Option<String> = self
+            .conn
+            .query_row("SELECT data FROM library_agents WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten();
+        data.and_then(|d| serde_json::from_str(&d).ok())
+    }
+
+    pub fn create_library_agent(&self, mut agent: LibraryAgent) -> LibraryAgent {
+        if agent.id.is_empty() {
+            agent.id = new_id();
+        }
+        agent.created_at = now_secs();
+        agent.updated_at = agent.created_at;
+        agent.spec.name = agent.name.clone();
+        let _ = self.put_library_agent(&agent);
+        agent
+    }
+
+    pub fn update_library_agent(&self, id: &str, mut agent: LibraryAgent) -> Option<LibraryAgent> {
+        let existing = self.get_library_agent(id)?;
+        agent.id = id.to_string();
+        agent.created_at = existing.created_at;
+        agent.updated_at = now_secs();
+        agent.spec.name = agent.name.clone();
+        self.put_library_agent(&agent).ok()?;
+        Some(agent)
+    }
+
+    pub fn delete_library_agent(&self, id: &str) -> bool {
+        self.conn
+            .execute("DELETE FROM library_agents WHERE id = ?1", [id])
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    // ── Skills (ClawHub-installed SKILL.md packages) ────────────────────────
+
+    /// Insert or update an installed skill, keyed by `slug`.
+    pub fn put_skill(&self, skill: &InstalledSkill) -> rusqlite::Result<()> {
+        let data = serde_json::to_string(skill).expect("serialize skill");
+        self.conn.execute(
+            "INSERT INTO skills (slug, name, data, installed_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(slug) DO UPDATE SET name = ?2, data = ?3, installed_at = ?4",
+            rusqlite::params![skill.slug, skill.name, data, skill.installed_at],
+        )?;
+        Ok(())
+    }
+
+    /// All installed skills, most-recently-installed first.
+    pub fn list_skills(&self) -> Vec<InstalledSkill> {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT data FROM skills ORDER BY installed_at DESC")
+        {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .map(|rows| {
+                rows.filter_map(|row| row.ok())
+                    .filter_map(|d| serde_json::from_str::<InstalledSkill>(&d).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn get_skill(&self, slug: &str) -> Option<InstalledSkill> {
+        let data: Option<String> = self
+            .conn
+            .query_row("SELECT data FROM skills WHERE slug = ?1", [slug], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten();
+        data.and_then(|d| serde_json::from_str(&d).ok())
+    }
+
+    pub fn delete_skill(&self, slug: &str) -> bool {
+        self.conn
+            .execute("DELETE FROM skills WHERE slug = ?1", [slug])
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    /// Toggle a skill's enabled flag; returns the updated skill.
+    pub fn set_skill_enabled(&self, slug: &str, enabled: bool) -> Option<InstalledSkill> {
+        let mut skill = self.get_skill(slug)?;
+        skill.enabled = enabled;
+        self.put_skill(&skill).ok()?;
+        Some(skill)
+    }
+
+    // ── Eval runs ───────────────────────────────────────────────────────────
+
+    /// Persist a completed eval run.
+    pub fn put_eval_run(&self, run: &EvalRun) -> rusqlite::Result<()> {
+        let data = serde_json::to_string(run).expect("serialize eval run");
+        self.conn.execute(
+            "INSERT INTO eval_runs (id, project_id, created_at, data) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET project_id = ?2, created_at = ?3, data = ?4",
+            rusqlite::params![run.id, run.project_id, run.created_at, data],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_eval_run(&self, id: &str) -> Option<EvalRun> {
+        let data: Option<String> = self
+            .conn
+            .query_row("SELECT data FROM eval_runs WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten();
+        data.and_then(|d| serde_json::from_str(&d).ok())
+    }
+
+    /// Eval runs, optionally filtered to one project, newest first.
+    pub fn list_eval_runs(&self, project_id: Option<&str>) -> Vec<EvalRun> {
+        let (sql, has_filter) = match project_id {
+            Some(_) => (
+                "SELECT data FROM eval_runs WHERE project_id = ?1 ORDER BY created_at DESC",
+                true,
+            ),
+            None => ("SELECT data FROM eval_runs ORDER BY created_at DESC", false),
+        };
+        let mut stmt = match self.conn.prepare(sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let map = |row: &rusqlite::Row| row.get::<_, String>(0);
+        let rows = if has_filter {
+            stmt.query_map([project_id.unwrap()], map)
+        } else {
+            stmt.query_map([], map)
+        };
+        rows.map(|it| {
+            it.filter_map(Result::ok)
+                .filter_map(|d| serde_json::from_str::<EvalRun>(&d).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+    }
+
+    // ── Declarative algorithms (meta-agent hot-registered) ──────────────────
+
+    /// Persist a declarative algorithm (last writer wins by name).
+    pub fn put_algorithm(&self, algo: &DeclarativeAlgorithm) -> rusqlite::Result<()> {
+        let data = serde_json::to_string(algo).expect("serialize algorithm");
+        self.conn.execute(
+            "INSERT INTO algorithms (name, kind, data, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(name) DO UPDATE SET kind = ?2, data = ?3, created_at = ?4",
+            rusqlite::params![algo.name, algo.kind, data, crate::project::now_secs()],
+        )?;
+        Ok(())
+    }
+
+    /// All persisted declarative algorithms.
+    pub fn list_algorithms(&self) -> Vec<DeclarativeAlgorithm> {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT data FROM algorithms ORDER BY created_at DESC")
+        {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .map(|rows| {
+                rows.filter_map(|row| row.ok())
+                    .filter_map(|d| serde_json::from_str::<DeclarativeAlgorithm>(&d).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn delete_algorithm(&self, name: &str) -> bool {
+        self.conn
+            .execute("DELETE FROM algorithms WHERE name = ?1", [name])
+            .map(|n| n > 0)
+            .unwrap_or(false)
+    }
+
+    /// Top eval runs by accuracy (leaderboard), newest-as-tiebreak.
+    pub fn leaderboard(&self, limit: usize) -> Vec<EvalRunSummary> {
+        let mut runs = self.list_eval_runs(None);
+        runs.sort_by(|a, b| {
+            b.accuracy
+                .partial_cmp(&a.accuracy)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(
+                    b.created_at
+                        .partial_cmp(&a.created_at)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+        });
+        runs.into_iter().take(limit).map(|r| r.summary()).collect()
+    }
+
     pub fn get_layout(&self, id: &str) -> Layout {
         let data: Option<String> = self
             .conn
-            .query_row("SELECT data FROM layouts WHERE project_id = ?1", [id], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT data FROM layouts WHERE project_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
             .optional()
             .ok()
             .flatten();
@@ -285,9 +567,11 @@ impl Store {
     pub fn get_canvas_run(&self, run_id: &str) -> Option<CanvasRun> {
         let data: Option<String> = self
             .conn
-            .query_row("SELECT data FROM canvas_runs WHERE id = ?1", [run_id], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT data FROM canvas_runs WHERE id = ?1",
+                [run_id],
+                |r| r.get(0),
+            )
             .optional()
             .ok()
             .flatten();
@@ -302,11 +586,7 @@ impl Store {
         let nodes: Vec<SessionNode> = runs
             .iter()
             .map(|r| {
-                let parent = r
-                    .parent
-                    .as_ref()
-                    .filter(|p| run_ids.contains(*p))
-                    .cloned();
+                let parent = r.parent.as_ref().filter(|p| run_ids.contains(*p)).cloned();
                 SessionNode {
                     id: r.id.clone(),
                     kind: "run".to_string(),
@@ -337,6 +617,7 @@ impl Store {
         ops: &[Value],
         dry_run: bool,
         base_rev: Option<u64>,
+        extra_names: &[(String, String)],
     ) -> Result<OpsResult, OpsError> {
         let project = self.get_project(id).ok_or(OpsError::NotFound)?;
 
@@ -351,7 +632,7 @@ impl Store {
             }
         }
 
-        let names = registry::names_by_kind();
+        let names = registry::names_by_kind_merged(extra_names);
         let tools = registry::tool_names();
         let result = ops_apply_ops(&project, ops, &names, &tools);
         if !result.ok() {
@@ -470,12 +751,17 @@ mod tests {
             json!({ "op": "add_agent", "name": "verifier" }),
             json!({ "op": "set_slot", "agent": "verifier", "kind": "loop", "ref": "reflexion" }),
         ];
-        let res = store.apply_ops("sample", &ops, false, Some(0)).expect("apply");
+        let res = store
+            .apply_ops("sample", &ops, false, Some(0), &[])
+            .expect("apply");
         assert_eq!(res.applied, 2);
         assert_eq!(res.rev, 1);
         let p = store.get_project("sample").unwrap();
         assert_eq!(p.agents.len(), 3);
-        assert_eq!(p.agent("verifier").unwrap().r#loop.as_ref().unwrap().name, "reflexion");
+        assert_eq!(
+            p.agent("verifier").unwrap().r#loop.as_ref().unwrap().name,
+            "reflexion"
+        );
     }
 
     #[test]
@@ -487,7 +773,9 @@ mod tests {
             json!({ "op": "add_agent", "name": "x" }),
             json!({ "op": "set_slot", "agent": "x", "kind": "loop", "ref": "does_not_exist" }),
         ];
-        let err = store.apply_ops("sample", &ops, false, None).unwrap_err();
+        let err = store
+            .apply_ops("sample", &ops, false, None, &[])
+            .unwrap_err();
         match err {
             OpsError::Invalid { problems } => assert_eq!(problems.len(), 1),
             _ => panic!("expected Invalid"),
@@ -502,10 +790,12 @@ mod tests {
     fn apply_ops_dry_run_does_not_persist() {
         let store = seeded();
         let ops = vec![json!({ "op": "add_agent", "name": "ghost" })];
-        let res = store.apply_ops("sample", &ops, true, None).expect("dry run");
+        let res = store
+            .apply_ops("sample", &ops, true, None, &[])
+            .expect("dry run");
         assert!(res.dry_run);
         assert_eq!(res.project.agents.len(), 3); // preview includes the add
-        // …but the stored project is unchanged.
+                                                 // …but the stored project is unchanged.
         assert_eq!(store.get_project("sample").unwrap().agents.len(), 2);
     }
 
@@ -513,7 +803,13 @@ mod tests {
     fn apply_ops_stale_base_rev_rejected() {
         let store = seeded();
         let err = store
-            .apply_ops("sample", &[json!({ "op": "clear_scorer" })], false, Some(99))
+            .apply_ops(
+                "sample",
+                &[json!({ "op": "clear_scorer" })],
+                false,
+                Some(99),
+                &[],
+            )
             .unwrap_err();
         assert!(matches!(err, OpsError::Stale { .. }));
     }

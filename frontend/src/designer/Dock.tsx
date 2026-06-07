@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, CanvasRun, SessionNode } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
+import { useT } from "../i18n/context";
 import { RuntimeMonitorPanel } from "./RuntimeMonitor";
 import { useDesigner } from "./store";
 
@@ -30,21 +31,22 @@ function summarize(v: unknown): string {
 }
 
 function RunPanel() {
+  const t = useT();
   const { running, runLog, runResult, runTask, forkParent, forkTurn, setForkParent } = useDesigner();
   const [task, setTask] = useState("What is 2 + 2? Reply with FINAL ANSWER:");
   return (
     <div className="dock-pane">
       {forkParent ? (
         <div className="fork-banner">
-          ↳ 分叉自 run <code>{forkParent.slice(0, 8)}</code>
+          ↳ {t("dock.forkedFrom")} <code>{forkParent.slice(0, 8)}</code>
           {forkTurn != null ? <> · turn <code>{forkTurn}</code></> : null}
-          <button className="btn" onClick={() => setForkParent(null)}>取消分叉</button>
+          <button type="button" className="btn" onClick={() => setForkParent(null)}>{t("dock.cancelFork")}</button>
         </div>
       ) : null}
       <div className="dock-row">
-        <input value={task} onChange={(e) => setTask(e.target.value)} placeholder="Task to run…" />
-        <button className="btn primary" onClick={() => runTask(task)} disabled={running}>
-          {running ? "Running…" : forkParent ? "Run (fork)" : "Run"}
+        <input value={task} onChange={(e) => setTask(e.target.value)} placeholder={t("common.taskPlaceholder")} />
+        <button className="btn btn-primary" onClick={() => runTask(task)} disabled={running}>
+          {running ? t("experiments.running") : forkParent ? `${t("common.run")} (${t("common.fork")})` : t("dock.runTask")}
         </button>
       </div>
       {runResult ? <div className="run-result"><b>Result:</b> {runResult}</div> : null}
@@ -110,6 +112,7 @@ function RunComparison({ a, b }: { a: CanvasRun; b: CanvasRun }) {
 }
 
 function HistoryPanel() {
+  const t = useT();
   const { runs, overlayRunId, showRunOnCanvas, loadRuns } = useDesigner();
   const [sel, setSel] = useState<string[]>([]); // up to 2 run ids for comparison
 
@@ -133,7 +136,7 @@ function HistoryPanel() {
           {runs.length} run{runs.length === 1 ? "" : "s"}. Click a run to overlay its metrics on the canvas; tick two to compare.
         </span>
         <span className="spacer" />
-        {overlayRunId ? <button className="btn" onClick={() => showRunOnCanvas(null)}>Clear overlay</button> : null}
+        {overlayRunId ? <button className="btn" onClick={() => showRunOnCanvas(null)}>{t("dock.clearOverlay")}</button> : null}
       </div>
       {runs.length === 0 ? (
         <span className="muted" style={{ fontSize: 12 }}>No runs yet — run the project to record history.</span>
@@ -164,6 +167,7 @@ function HistoryPanel() {
 }
 
 function SessionPanel({ onForked }: { onForked: () => void }) {
+  const t = useT();
   const { session, sessionRoots, loadSession, setForkParent, forkParent, forkTurn } = useDesigner();
 
   useEffect(() => {
@@ -210,14 +214,14 @@ function SessionPanel({ onForked }: { onForked: () => void }) {
             <>
               <span className="sess-id">T{n.turn}</span>
               <span className="sess-result" title={n.assistant}>{n.assistant || "—"}</span>
-              <button className="btn sess-fork" onClick={() => forkFromTurn(n.run_id!, n.turn!)} title="从该回合分叉">分叉</button>
+              <button type="button" className="btn btn-sm sess-fork" onClick={() => forkFromTurn(n.run_id!, n.turn!)} title={t("dock.forkFromTurn")}>{t("common.fork")}</button>
             </>
           ) : (
             <>
               <span className="sess-id">{n.id.slice(0, 8)}</span>
               <span className="sess-task" title={n.task}>{n.task || "—"}</span>
               <span className="sess-result" title={n.result}>{n.result || "—"}</span>
-              <button className="btn sess-fork" onClick={() => forkFromRun(n.id)} title="从整次运行分叉">分叉</button>
+              <button type="button" className="btn btn-sm sess-fork" onClick={() => forkFromRun(n.id)} title={t("dock.forkFromRun")}>{t("common.fork")}</button>
             </>
           )}
         </div>
@@ -229,12 +233,10 @@ function SessionPanel({ onForked }: { onForked: () => void }) {
   return (
     <div className="dock-pane">
       <div className="dock-row">
-        <span className="muted" style={{ fontSize: 12 }}>
-          会话树：展开每次运行的回合节点；可从整次运行或某一回合分叉并重跑。
-        </span>
+        <span className="muted" style={{ fontSize: 12 }}>{t("dock.sessionHint")}</span>
       </div>
       {session.length === 0 ? (
-        <span className="muted" style={{ fontSize: 12 }}>暂无运行节点 — 在 Run 里跑一次即可生成。</span>
+        <span className="muted" style={{ fontSize: 12 }}>{t("dock.noRuns")}</span>
       ) : (
         <div className="sess-tree">
           {(sessionRoots.length ? sessionRoots : Object.keys(childrenOf))
@@ -269,6 +271,7 @@ function opLabel(op: Record<string, unknown>): string {
 }
 
 function CopilotPanel() {
+  const t = useT();
   const { proposing, proposal, propose, clearProposal, applyOps } = useDesigner();
   const [text, setText] = useState("");
   const [picked, setPicked] = useState<Set<number>>(new Set());
@@ -300,7 +303,7 @@ function CopilotPanel() {
           onKeyDown={(e) => e.key === "Enter" && propose(text)}
           placeholder="e.g. add a critic agent and switch to coordinated with debate"
         />
-        <button className="btn primary" onClick={() => propose(text)} disabled={proposing}>
+        <button className="btn btn-primary" onClick={() => propose(text)} disabled={proposing}>
           {proposing ? "Thinking…" : "Propose"}
         </button>
       </div>
@@ -336,11 +339,11 @@ function CopilotPanel() {
                 </ul>
               ) : null}
               <div className="cop-actions">
-                <button className="cp-tab" onClick={() => setShowJson((v) => !v)}>{showJson ? "hide JSON" : "JSON"}</button>
+                <button className="cp-tab" onClick={() => setShowJson((v) => !v)}>{showJson ? t("dock.hideJson") : t("dock.json")}</button>
                 <span className="cop-ok">{picked.size}/{proposal.ops.length} selected</span>
                 <span className="spacer" />
-                <button className="btn" onClick={clearProposal}>Discard</button>
-                <button className="btn primary" onClick={applySelected} disabled={picked.size === 0}>Apply selected</button>
+                <button className="btn" onClick={clearProposal}>{t("dock.discard")}</button>
+                <button className="btn btn-primary" onClick={applySelected} disabled={picked.size === 0}>{t("dock.applySelected")}</button>
               </div>
               {showJson ? <CodeBlock code={JSON.stringify(proposal.ops, null, 2)} title="edit ops" /> : null}
             </>
@@ -358,6 +361,7 @@ function CopilotPanel() {
 }
 
 function CodePanel() {
+  const t = useT();
   const { project, projectId } = useDesigner();
   const [code, setCode] = useState<Record<string, string>>({});
   const [active, setActive] = useState("");
@@ -380,7 +384,7 @@ function CodePanel() {
   return (
     <div className="dock-pane code-pane">
       <div className="dock-row">
-        <button className="btn" onClick={refresh} disabled={loading}>{loading ? "Generating…" : "Regenerate"}</button>
+        <button className="btn" onClick={refresh} disabled={loading}>{loading ? t("dock.generating") : t("dock.regenerate")}</button>
         <span className="cp-tabs">
           {files.map((f) => (
             <button key={f} className={"cp-tab" + (f === active ? " active" : "")} onClick={() => setActive(f)}>{f}</button>
@@ -393,28 +397,29 @@ function CodePanel() {
 }
 
 export function Dock({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const [tab, setTab] = useState<DockTab>("run");
   const proposal = useDesigner((s) => s.proposal);
   const runs = useDesigner((s) => s.runs);
   const runtimeActive = useDesigner((s) => s.runtimeActive);
   const tabs: { id: DockTab; label: string }[] = [
-    { id: "run", label: "Run" },
+    { id: "run", label: t("dock.runTab") },
     { id: "monitor", label: runtimeActive > 0 ? `Monitor (${runtimeActive})` : "Monitor" },
     { id: "history", label: runs.length ? `History (${runs.length})` : "History" },
-    { id: "session", label: "Session" },
-    { id: "copilot", label: proposal ? "Copilot ●" : "Copilot" },
-    { id: "code", label: "Code" },
+    { id: "session", label: t("dock.sessionTab") },
+    { id: "copilot", label: proposal ? `${t("dock.copilot")} ●` : t("dock.copilot") },
+    { id: "code", label: t("dock.code") },
   ];
   return (
     <div className="dock">
       <div className="dock-head">
         <div className="seg">
-          {tabs.map((t) => (
-            <button key={t.id} className={t.id === tab ? "active" : ""} onClick={() => setTab(t.id)}>{t.label}</button>
+          {tabs.map((tabItem) => (
+            <button key={tabItem.id} className={tabItem.id === tab ? "active" : ""} onClick={() => setTab(tabItem.id)}>{tabItem.label}</button>
           ))}
         </div>
         <span className="spacer" />
-        <button className="btn" onClick={onClose}>Close</button>
+        <button className="btn" onClick={onClose}>{t("dock.close")}</button>
       </div>
       {tab === "run" && <RunPanel />}
       {tab === "history" && <HistoryPanel />}

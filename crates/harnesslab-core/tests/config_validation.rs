@@ -1,9 +1,9 @@
 mod config_loader;
 
+use harness_rt::agent::tool::ToolRegistry;
+use harness_rt::policy::PolicyGate;
 use harnesslab_core::config::AgentConfig as KernelAgentConfig;
 use harnesslab_core::loader::build_harness_config;
-use piscis_kernel::agent::tool::ToolRegistry;
-use piscis_kernel::policy::PolicyGate;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -94,9 +94,10 @@ mod tests {
 
     #[test]
     fn test_strategy_differentiation() {
-        let react_config =
-            KernelAgentConfig::from_file(PathBuf::from(workspace_path("configs/react_agent.yaml")).as_path())
-                .unwrap();
+        let react_config = KernelAgentConfig::from_file(
+            PathBuf::from(workspace_path("configs/react_agent.yaml")).as_path(),
+        )
+        .unwrap();
         let pas_config = KernelAgentConfig::from_file(
             PathBuf::from(workspace_path("configs/plan_and_solve_agent.yaml")).as_path(),
         )

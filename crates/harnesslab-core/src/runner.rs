@@ -1,25 +1,25 @@
 //! Live project execution over `piscis-kernel` (P3).
 //!
-//! Bridges the visual [`Project`] model to the kernel agent loop: it maps the
-//! primary agent's slots to a [`AgentConfig`], builds the harness, runs the
-//! task and **translates** every kernel [`AgentEvent`] into the flat
+//! Bridges the visual [`Project`] model to the kernel agent loop: it maps each
+//! agent's slots to a [`AgentConfig`], builds the harness, runs the task and
+//! **translates** every kernel [`AgentEvent`] into the flat
 //! `{kind, agent, text, data, ts}` shape the ported frontend console + metrics
 //! already understand.
 //!
-//! P3 runs the project's *primary* agent (single mode, or the first agent in
-//! topology order). Multi-agent coordination is a later increment.
+//! Single-agent topology runs one kernel loop; coordinated topology delegates to
+//! [`crate::coordinator`] which orchestrates multiple agent runs.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use piscis_kernel::agent::loop_::AgentLoop;
-use piscis_kernel::agent::messages::AgentEvent;
-use piscis_kernel::agent::tool::{ToolContext, ToolRegistry, ToolSettings};
-use piscis_kernel::llm::{build_client_with_timeout, LlmMessage, MessageContent};
-use piscis_kernel::policy::PolicyGate;
-use piscis_kernel::tools::{register_neutral_into, NeutralToolsConfig};
+use harness_rt::agent::loop_::AgentLoop;
+use harness_rt::agent::messages::AgentEvent;
+use harness_rt::agent::tool::{ToolContext, ToolRegistry, ToolSettings};
+use harness_rt::llm::{build_client_with_timeout, LlmMessage, MessageContent};
+use harness_rt::policy::PolicyGate;
+use harness_rt::tools::{register_neutral_into, NeutralToolsConfig};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -30,6 +30,8 @@ use crate::config::{
 };
 use crate::loader::build_harness_config;
 use crate::project::{now_secs, AgentSpec, Project};
+
+mod coordinator;
 
 /// LLM credentials, resolved from the environment for now (a settings UI lands
 /// later). Mirrors the headless CLI's env contract.
@@ -93,60 +95,70 @@ pub struct RunOutcome {
     pub total_output_tokens: u32,
 }
 
+/// Shared context passed to each agent invocation during a coordinated run.
+#[derive(Clone)]
+pub struct AgentRunContext {
+    pub workspace: PathBuf,
+    pub events: mpsc::Sender<UiEvent>,
+    pub cancel: Arc<AtomicBool>,
+}
+
+/// Outcome of one agent kernel loop (used by coordinators to aggregate tokens).
+#[derive(Debug, Clone, Default)]
+pub struct AgentRunOutcome {
+    pub result: String,
+    pub total_input_tokens: u32,
+    pub total_output_tokens: u32,
+}
+
 // ── Project → AgentConfig mapping ────────────────────────────────────────────
 
 fn slot_name<'a>(slot: &'a Option<crate::project::ComponentRef>) -> Option<&'a str> {
     slot.as_ref().map(|c| c.name.as_str())
 }
 
-/// Map the project's loop component to a kernel loop-strategy id, falling back
-/// to `react` when the name is not one the kernel resolves (so the harness
-/// builder never rejects an experimental palette entry).
+/// Map the project's loop component to a runtime loop-strategy id.
+///
+/// All catalog loop names resolve to a real strategy; an empty slot defaults to
+/// `react`. Unknown names pass through so the harness builder rejects them
+/// loudly rather than silently degrading.
 fn map_loop(spec: &AgentSpec) -> String {
-    let name = slot_name(&spec.r#loop).unwrap_or("react");
-    use piscis_kernel::agent::loop_strategy::resolve_loop_strategy;
-    if resolve_loop_strategy(name).is_some() {
-        name.to_string()
-    } else {
-        "react".to_string()
-    }
+    slot_name(&spec.r#loop).unwrap_or("react").to_string()
 }
 
-/// Map the project's compaction component to a kernel compaction-strategy id.
+/// Map the project's compaction component to a runtime compaction-strategy id.
 fn map_compaction(spec: &AgentSpec) -> String {
-    let id = match slot_name(&spec.compaction) {
+    match slot_name(&spec.compaction) {
+        None => "summary_based",
         Some("summary") => "summary_based",
+        Some("none") => "none",
         Some("sliding_window") => "sliding_window",
         Some("vector_retrieval") => "vector_retrieval",
-        _ => "summary_based",
-    };
-    use piscis_kernel::agent::loop_::resolve_compaction_strategy;
-    if resolve_compaction_strategy(id, None).is_some() {
-        id.to_string()
-    } else {
-        "summary_based".to_string()
-    }
-}
-
-/// Map the project's memory component to a kernel memory-plugin id.
-fn map_memory(spec: &AgentSpec) -> String {
-    match slot_name(&spec.memory) {
-        Some("in_memory_vector") => "InMemoryVectorStore",
-        Some("sqlite") => "SqliteMemory",
-        // Persistent vector store has no kernel backend yet → session-scoped.
-        Some("persistent_vector") => "InMemoryVectorStore",
-        _ => "NoOpMemory",
+        Some(other) => other,
     }
     .to_string()
 }
 
-/// Map the project's context component to a kernel context-manager id.
+/// Map the project's memory component to a runtime memory-plugin id.
+fn map_memory(spec: &AgentSpec) -> String {
+    match slot_name(&spec.memory) {
+        None | Some("noop") => "NoOpMemory",
+        Some("in_memory_vector") => "InMemoryVectorStore",
+        // Both persistent slots resolve to the SQLite-backed store.
+        Some("sqlite") | Some("persistent_vector") => "SqliteMemory",
+        Some(other) => other,
+    }
+    .to_string()
+}
+
+/// Map the project's context component to a runtime context-manager id.
 fn map_context(spec: &AgentSpec) -> String {
     match slot_name(&spec.context) {
+        None | Some("project_context") => "ProjectContextManager",
         Some("workspace_root") => "WorkspaceRootManager",
         Some("rag") => "DynamicContextManager",
-        // "project_context", "none" and anything else → project scan (harmless).
-        _ => "ProjectContextManager",
+        Some("none") => "NoOpContextManager",
+        Some(other) => other,
     }
     .to_string()
 }
@@ -158,7 +170,10 @@ pub fn agent_config_for(spec: &AgentSpec) -> AgentConfig {
     } else if !spec.role.trim().is_empty() {
         spec.role.clone()
     } else {
-        format!("You are {}. Follow the user's instructions carefully.", spec.name)
+        format!(
+            "You are {}. Follow the user's instructions carefully.",
+            spec.name
+        )
     };
 
     AgentConfig {
@@ -193,9 +208,21 @@ pub fn agent_config_for(spec: &AgentSpec) -> AgentConfig {
 
 // ── Run execution ────────────────────────────────────────────────────────────
 
-fn default_tool_registry() -> ToolRegistry {
+/// Build the tool registry for an agent, honoring its `enabled_tools` whitelist.
+///
+/// `None` (absent) registers all built-in tools; `Some(list)` registers exactly
+/// the named tools (an empty list yields a reasoning-only, tool-free agent).
+/// The runtime additionally filters out tools whose platform does not match the
+/// host OS.
+fn agent_tool_registry(enabled_tools: Option<&[String]>) -> ToolRegistry {
     let mut registry = ToolRegistry::new();
-    register_neutral_into(&mut registry, &NeutralToolsConfig::default());
+    let mut cfg = NeutralToolsConfig::default();
+    if let Some(list) = enabled_tools {
+        let map: std::collections::HashMap<String, bool> =
+            list.iter().map(|t| (t.clone(), true)).collect();
+        cfg.builtin_tool_enabled = Some(map);
+    }
+    register_neutral_into(&mut registry, &cfg);
     registry
 }
 
@@ -269,9 +296,12 @@ fn translate(agent: &str, ev: &AgentEvent, segment: &mut String) -> Option<UiEve
             }),
         ),
         AgentEvent::Cancelled => UiEvent::new(agent, "cancelled", "run cancelled", json!({})),
-        AgentEvent::Error { message } => {
-            UiEvent::new(agent, "error", message.clone(), json!({ "message": message }))
-        }
+        AgentEvent::Error { message } => UiEvent::new(
+            agent,
+            "error",
+            message.clone(),
+            json!({ "message": message }),
+        ),
         AgentEvent::PlanUpdate { items } => UiEvent::new(
             agent,
             "plan",
@@ -303,83 +333,151 @@ fn translate(agent: &str, ev: &AgentEvent, segment: &mut String) -> Option<UiEve
     })
 }
 
-/// Run a task against the project's primary agent, streaming translated events
-/// to `events` and returning the final outcome.
-pub async fn run_project_task(
-    project: &Project,
+/// Run one agent's kernel loop, streaming translated events tagged with its name.
+pub async fn run_agent_task(
+    ctx: &AgentRunContext,
+    spec: &AgentSpec,
     task: &str,
-    creds: &LlmCreds,
-    workspace: &Path,
-    events: mpsc::Sender<UiEvent>,
-    cancel: Arc<AtomicBool>,
-) -> Result<RunOutcome, String> {
-    // Install contributed strategies so palette loop/compaction names resolve.
+    context: &str,
+) -> Result<AgentRunOutcome, String> {
     crate::contrib::register_all();
 
-    let spec = project
-        .ordered_agents()
-        .into_iter()
-        .next()
-        .ok_or_else(|| "项目没有可运行的 agent".to_string())?;
-    let agent_name = spec.name.clone();
+    let resolved = crate::stages::credentials::resolve_for_agent(spec)?;
+    let mut run_spec = spec.clone();
+    run_spec.model = resolved.model.clone();
 
-    let cfg = agent_config_for(spec);
-    let registry = Arc::new(default_tool_registry());
-    let policy = Arc::new(PolicyGate::new(workspace.to_path_buf()));
-    let harness = build_harness_config(&cfg, registry, policy, Some(workspace))
-        .map_err(|e| format!("构建 harness 失败: {e}"))?;
+    let agent_name = spec.name.clone();
+    let cfg = agent_config_for(&run_spec);
+    let registry = Arc::new(agent_tool_registry(cfg.enabled_tools.as_deref()));
+    let policy = Arc::new(PolicyGate::new(ctx.workspace.clone()));
+    let harness = build_harness_config(&cfg, registry, policy, Some(&ctx.workspace))
+        .map_err(|e| format!("构建 harness 失败 ({agent_name}): {e}"))?;
 
     let model = harness.model.clone();
     let client = build_client_with_timeout(
-        &creds.provider,
-        &creds.api_key,
-        creds.base_url.as_deref(),
+        &resolved.creds.provider,
+        &resolved.creds.api_key,
+        resolved.creds.base_url.as_deref(),
         120,
     );
     let agent: Arc<AgentLoop> = Arc::new(harness.into_agent_loop(client, None, None));
 
-    let _ = events
+    let _ = ctx
+        .events
         .send(UiEvent::new(
             &agent_name,
             "run_start",
             "",
-            json!({ "model": model, "provider": creds.provider }),
+            json!({ "model": model, "provider": resolved.creds.provider }),
         ))
         .await;
 
+    let user_content = if context.is_empty() {
+        task.to_string()
+    } else {
+        format!("{task}\n\n## Shared context\n{context}")
+    };
+
     let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
-    let ctx = make_tool_context(workspace, &agent_name, cancel.clone());
+    let tool_ctx = make_tool_context(&ctx.workspace, &agent_name, ctx.cancel.clone());
     let messages = vec![LlmMessage {
         role: "user".to_string(),
-        content: MessageContent::text(task),
+        content: MessageContent::text(&user_content),
     }];
 
     let agent_run = agent.clone();
-    let cancel_run = cancel.clone();
+    let cancel_run = ctx.cancel.clone();
     let handle =
-        tokio::spawn(async move { agent_run.run(messages, tx, cancel_run, ctx).await });
+        tokio::spawn(async move { agent_run.run(messages, tx, cancel_run, tool_ctx).await });
 
     let mut segment = String::new();
     let mut last_answer = String::new();
+    let mut total_in = 0u32;
+    let mut total_out = 0u32;
     while let Some(ev) = rx.recv().await {
+        if let AgentEvent::Done {
+            total_input_tokens,
+            total_output_tokens,
+        } = &ev
+        {
+            total_in = *total_input_tokens;
+            total_out = *total_output_tokens;
+        }
         if let Some(ui) = translate(&agent_name, &ev, &mut segment) {
-            // Snapshot the latest assistant segment as the running answer.
             if !segment.trim().is_empty() {
                 last_answer = segment.clone();
             }
-            let _ = events.send(ui).await;
+            let _ = ctx.events.send(ui).await;
         }
     }
 
     match handle.await {
-        Ok(Ok((_msgs, total_in, total_out))) => Ok(RunOutcome {
+        Ok(Ok((_msgs, in_t, out_t))) => Ok(AgentRunOutcome {
             result: last_answer,
-            total_input_tokens: total_in,
-            total_output_tokens: total_out,
+            total_input_tokens: in_t.max(total_in),
+            total_output_tokens: out_t.max(total_out),
         }),
-        Ok(Err(e)) => Err(format!("agent loop failed: {e}")),
-        Err(e) => Err(format!("agent task panicked: {e}")),
+        Ok(Err(e)) => Err(format!("agent {agent_name} failed: {e}")),
+        Err(e) => Err(format!("agent {agent_name} panicked: {e}")),
     }
+}
+
+/// Run a task against the project — single agent or coordinated multi-agent —
+/// streaming translated events to `events`.
+pub async fn run_project_task(
+    project: &Project,
+    task: &str,
+    workspace: &Path,
+    events: mpsc::Sender<UiEvent>,
+    cancel: Arc<AtomicBool>,
+) -> Result<RunOutcome, String> {
+    let specs = project.ordered_agents();
+    if specs.is_empty() {
+        return Err("项目没有可运行的 agent".to_string());
+    }
+
+    // Fail fast if the primary agent cannot resolve credentials.
+    crate::stages::credentials::resolve_for_agent(specs[0])?;
+
+    let ctx = AgentRunContext {
+        workspace: workspace.to_path_buf(),
+        events: events.clone(),
+        cancel,
+    };
+
+    let topo = &project.topology;
+    let outcome = if topo.mode == "single" || specs.len() == 1 || topo.coordinator.is_none() {
+        let spec = &specs[0];
+        run_agent_task(&ctx, spec, task, "").await?
+    } else {
+        let coord = topo.coordinator.as_ref().unwrap();
+        let _ = events
+            .send(UiEvent::new(
+                "__coordinator__",
+                "coord_start",
+                &coord.name,
+                json!({ "mode": topo.mode, "agents": specs.iter().map(|s| &s.name).collect::<Vec<_>>() }),
+            ))
+            .await;
+        let owned: Vec<AgentSpec> = specs.iter().map(|s| (*s).clone()).collect();
+        let result =
+            coordinator::coordinate(&coord.name, &coord.params, &owned, task, &ctx).await?;
+        let _ = events
+            .send(UiEvent::new(
+                "__coordinator__",
+                "coord_end",
+                "",
+                json!({ "coordinator": coord.name }),
+            ))
+            .await;
+        result
+    };
+
+    Ok(RunOutcome {
+        result: outcome.result,
+        total_input_tokens: outcome.total_input_tokens,
+        total_output_tokens: outcome.total_output_tokens,
+    })
 }
 
 /// Per-agent run metrics, mirroring the frontend `computeMetrics` so a saved
@@ -427,6 +525,10 @@ pub fn project_workspace(base: &Path, project_id: &str) -> PathBuf {
     base.join("workspaces").join(project_id)
 }
 
+pub fn library_agent_workspace(base: &Path, agent_id: &str) -> PathBuf {
+    base.join("library-agents").join(agent_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,17 +551,37 @@ mod tests {
     }
 
     #[test]
-    fn config_falls_back_for_unknown_or_none_slots() {
+    fn config_maps_real_slots_without_silent_fallback() {
+        // Every catalog slot maps to a real runtime id (no silent rewrite).
         let mut spec = AgentSpec::new("a");
-        spec.r#loop = Some(ComponentRef::new("nonsense_loop"));
+        spec.r#loop = Some(ComponentRef::new("rewoo"));
         spec.compaction = Some(ComponentRef::new("none"));
-        spec.memory = Some(ComponentRef::new("noop"));
+        spec.memory = Some(ComponentRef::new("persistent_vector"));
         spec.context = Some(ComponentRef::new("none"));
         let cfg = agent_config_for(&spec);
+        assert_eq!(cfg.strategy.strategy_type, "rewoo");
+        assert_eq!(cfg.compression.strategy, "none");
+        assert_eq!(cfg.plugins.memory, "SqliteMemory");
+        assert_eq!(cfg.plugins.context, "NoOpContextManager");
+
+        // The default AgentSpec slots map to their real runtime ids.
+        let bare = AgentSpec::new("b");
+        let cfg = agent_config_for(&bare);
         assert_eq!(cfg.strategy.strategy_type, "react");
-        assert_eq!(cfg.compression.strategy, "summary_based");
+        assert_eq!(cfg.compression.strategy, "sliding_window");
         assert_eq!(cfg.plugins.memory, "NoOpMemory");
-        assert_eq!(cfg.plugins.context, "ProjectContextManager");
+        assert_eq!(cfg.plugins.context, "NoOpContextManager");
+    }
+
+    #[test]
+    fn unknown_slot_names_fail_loudly() {
+        // An unknown loop name passes through and the harness builder rejects it.
+        let mut spec = AgentSpec::new("a");
+        spec.r#loop = Some(ComponentRef::new("telepathy"));
+        let cfg = agent_config_for(&spec);
+        let reg = Arc::new(ToolRegistry::new());
+        let policy = Arc::new(PolicyGate::new(std::path::PathBuf::from(".")));
+        assert!(build_harness_config(&cfg, reg, policy, Some(Path::new("."))).is_err());
     }
 
     #[test]

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ComponentSpec } from "../api";
+import { useT } from "../i18n/context";
 import { useDesigner } from "./store";
 
 const KIND_ORDER = ["loop", "compaction", "memory", "context", "coordinator", "scorer"];
@@ -21,6 +22,7 @@ function startDrag(kind: string, name: string) {
 }
 
 export function Palette() {
+  const t = useT();
   const catalog = useDesigner((s) => s.catalog);
   const [tools, setTools] = useState<{ name: string; description: string }[]>([]);
   const [q, setQ] = useState("");
@@ -35,9 +37,9 @@ export function Palette() {
   return (
     <aside className="palette">
       <div className="palette-search">
-        <input placeholder="Search components…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input placeholder={t("palette.search")} value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
-      <p className="palette-hint">Drag a component onto an agent slot, or a coordinator onto the canvas.</p>
+      <p className="palette-hint">{t("palette.dragHint")}</p>
       {kinds.map((kind) => {
         const items = (catalog[kind] as ComponentSpec[]).filter((c) => match(c.name) || match(c.description));
         if (!items.length) return null;

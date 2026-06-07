@@ -119,6 +119,25 @@ fn slot_mut<'a>(agent: &'a mut AgentSpec, kind: &str) -> Option<&'a mut Option<C
     })
 }
 
+fn slot_get<'a>(agent: &'a AgentSpec, kind: &str) -> Option<&'a ComponentRef> {
+    match kind {
+        "loop" => agent.r#loop.as_ref(),
+        "compaction" => agent.compaction.as_ref(),
+        "memory" => agent.memory.as_ref(),
+        "context" => agent.context.as_ref(),
+        "credentials" => agent.credentials.as_ref(),
+        "capabilities" => agent.capabilities.as_ref(),
+        "skills" => agent.skills.as_ref(),
+        "prompt" => agent.prompt.as_ref(),
+        "approval" => agent.approval.as_ref(),
+        "budget" => agent.budget.as_ref(),
+        "hooks" => agent.hooks.as_ref(),
+        "session" => agent.session.as_ref(),
+        "tracing" => agent.tracing.as_ref(),
+        _ => None,
+    }
+}
+
 fn op_str<'a>(op: &'a Value, key: &str) -> Option<&'a str> {
     op.get(key).and_then(|v| v.as_str())
 }
@@ -134,6 +153,7 @@ fn op_params(op: &Value) -> BTreeMap<String, Value> {
 fn required(kind: &str) -> Option<&'static [&'static str]> {
     Some(match kind {
         "add_agent" => &["name"],
+        "import_agent" => &["spec"],
         "remove_agent" => &["name"],
         "rename_agent" => &["name", "to"],
         "set_slot" => &["agent", "kind", "ref"],
@@ -164,7 +184,9 @@ fn validate_and_apply(
     let req = required(kind).ok_or_else(|| format!("op[{index}]: unknown op type {kind:?}"))?;
     for key in req {
         if op.get(*key).map(|v| v.is_null()).unwrap_or(true) {
-            return Err(format!("op[{index}] {kind}: missing required field {key:?}"));
+            return Err(format!(
+                "op[{index}] {kind}: missing required field {key:?}"
+            ));
         }
     }
 
@@ -172,7 +194,9 @@ fn validate_and_apply(
         "add_agent" => {
             let name = op_str(op, "name").unwrap().to_string();
             if agent_index(p, &name).is_some() {
-                return Err(format!("op[{index}] add_agent: agent {name:?} already exists"));
+                return Err(format!(
+                    "op[{index}] add_agent: agent {name:?} already exists"
+                ));
             }
             let mut spec = AgentSpec::new(&name);
             for slot in SLOT_KINDS {
@@ -198,6 +222,39 @@ fn validate_and_apply(
             if let Some(v) = op_str(op, "role") {
                 spec.role = v.to_string();
             }
+            p.agents.push(spec);
+            if !p.topology.agent_order.contains(&name) {
+                p.topology.agent_order.push(name);
+            }
+            Ok(())
+        }
+
+        "import_agent" => {
+            let spec_val = op
+                .get("spec")
+                .ok_or_else(|| format!("op[{index}] import_agent: missing spec object"))?;
+            let spec: AgentSpec = serde_json::from_value(spec_val.clone())
+                .map_err(|e| format!("op[{index}] import_agent: invalid spec: {e}"))?;
+            if spec.name.trim().is_empty() {
+                return Err(format!("op[{index}] import_agent: spec.name is required"));
+            }
+            if agent_index(p, &spec.name).is_some() {
+                return Err(format!(
+                    "op[{index}] import_agent: agent {:?} already exists",
+                    spec.name
+                ));
+            }
+            for slot in SLOT_KINDS {
+                if let Some(c) = slot_get(&spec, slot) {
+                    if !has_component(names, slot, &c.name) {
+                        return Err(format!(
+                            "op[{index}] import_agent: no {slot} component {:?}",
+                            c.name
+                        ));
+                    }
+                }
+            }
+            let name = spec.name.clone();
             p.agents.push(spec);
             if !p.topology.agent_order.contains(&name) {
                 p.topology.agent_order.push(name);
@@ -241,10 +298,14 @@ fn validate_and_apply(
             let slot = op_str(op, "kind").unwrap().to_string();
             let comp = op_str(op, "ref").unwrap().to_string();
             if !SLOT_KINDS.contains(&slot.as_str()) {
-                return Err(format!("op[{index}] set_slot: kind must be one of {SLOT_KINDS:?}"));
+                return Err(format!(
+                    "op[{index}] set_slot: kind must be one of {SLOT_KINDS:?}"
+                ));
             }
             if !has_component(names, &slot, &comp) {
-                return Err(format!("op[{index}] set_slot: no {slot} component {comp:?}"));
+                return Err(format!(
+                    "op[{index}] set_slot: no {slot} component {comp:?}"
+                ));
             }
             let params = op_params(op);
             let idx = agent_index(p, &agent)
@@ -259,7 +320,9 @@ fn validate_and_apply(
             let agent = op_str(op, "agent").unwrap().to_string();
             let slot = op_str(op, "kind").unwrap().to_string();
             if !SLOT_KINDS.contains(&slot.as_str()) {
-                return Err(format!("op[{index}] clear_slot: kind must be one of {SLOT_KINDS:?}"));
+                return Err(format!(
+                    "op[{index}] clear_slot: kind must be one of {SLOT_KINDS:?}"
+                ));
             }
             let idx = agent_index(p, &agent)
                 .ok_or_else(|| format!("op[{index}] clear_slot: no agent {agent:?}"))?;
@@ -351,9 +414,11 @@ fn validate_and_apply(
                 ));
             }
             if mode == "coordinated" {
-                let coord = op_str(op, "coordinator").filter(|s| !s.is_empty()).ok_or_else(|| {
-                    format!("op[{index}] set_topology: coordinated mode requires 'coordinator'")
-                })?;
+                let coord = op_str(op, "coordinator")
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| {
+                        format!("op[{index}] set_topology: coordinated mode requires 'coordinator'")
+                    })?;
                 if !has_component(names, "coordinator", coord) {
                     return Err(format!(
                         "op[{index}] set_topology: no coordinator component {coord:?}"
@@ -371,8 +436,10 @@ fn validate_and_apply(
                     .iter()
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
                     .collect();
-                let unknown: Vec<&String> =
-                    order.iter().filter(|n| agent_index(p, n).is_none()).collect();
+                let unknown: Vec<&String> = order
+                    .iter()
+                    .filter(|n| agent_index(p, n).is_none())
+                    .collect();
                 if !unknown.is_empty() {
                     return Err(format!(
                         "op[{index}] set_topology: unknown agents in order: {unknown:?}"
@@ -387,7 +454,9 @@ fn validate_and_apply(
         "set_scorer" => {
             let comp = op_str(op, "ref").unwrap().to_string();
             if !has_component(names, "scorer", &comp) {
-                return Err(format!("op[{index}] set_scorer: no scorer component {comp:?}"));
+                return Err(format!(
+                    "op[{index}] set_scorer: no scorer component {comp:?}"
+                ));
             }
             p.scorer = Some(ComponentRef {
                 name: comp,
@@ -424,7 +493,14 @@ pub fn diff_projects(before: &Project, after: &Project) -> BTreeMap<String, Valu
     let b = serde_json::to_value(before).unwrap_or(Value::Null);
     let a = serde_json::to_value(after).unwrap_or(Value::Null);
     let mut changed = BTreeMap::new();
-    for field in ["agents", "topology", "datasets", "scorer", "name", "description"] {
+    for field in [
+        "agents",
+        "topology",
+        "datasets",
+        "scorer",
+        "name",
+        "description",
+    ] {
         let bv = b.get(field).cloned().unwrap_or(Value::Null);
         let av = a.get(field).cloned().unwrap_or(Value::Null);
         if bv != av {

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { useT } from "../i18n/context";
+import { Select } from "./Select";
 
 interface Props {
   activeProject: string | null;
@@ -7,6 +9,7 @@ interface Props {
 }
 
 export function FactoryPanel({ activeProject, setActiveProject }: Props) {
+  const t = useT();
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [languages, setLanguages] = useState<string[]>([]);
   const [language, setLanguage] = useState("python");
@@ -15,6 +18,7 @@ export function FactoryPanel({ activeProject, setActiveProject }: Props) {
   const [files, setFiles] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<string>("");
   const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
 
   const codeOptions = () =>
     language === "rust" ? { rust_client: rustClient }
@@ -29,6 +33,7 @@ export function FactoryPanel({ activeProject, setActiveProject }: Props) {
   const generate = async () => {
     if (!activeProject) return;
     setErr("");
+    setMsg("");
     try {
       const res = await api.generate(activeProject, language, codeOptions());
       setFiles(res.files);
@@ -36,77 +41,90 @@ export function FactoryPanel({ activeProject, setActiveProject }: Props) {
     } catch (e) { setErr(String(e)); }
   };
 
-  const download = () => {
+  const download = async () => {
     if (!activeProject) return;
-    const form = document.createElement("form");
-    form.method = "POST";
-    form.action = api.downloadUrl;
-    // Use fetch instead to send JSON body; trigger blob download.
-    fetch(api.downloadUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project_id: activeProject, language, options: codeOptions() }),
-    }).then(async (r) => {
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `project_${language}.zip`; a.click();
-      URL.revokeObjectURL(url);
-    });
+    setErr("");
+    setMsg("");
+    try {
+      const saved = await api.downloadFactoryZip(activeProject, language, codeOptions());
+      if (saved) setMsg(t("factory.savedTo", { path: saved }));
+      else setMsg(t("factory.downloadCancelled"));
+    } catch (e) { setErr(String(e)); }
   };
 
+  const fileKeys = Object.keys(files);
+
   return (
-    <div className="panel">
-      <h2>Factory — generate production multi-agent code</h2>
-      <div className="row">
+    <div className="panel panel-stack page-fill">
+      <h2>{t("factory.title")}</h2>
+      <div className="row nowrap panel-intro">
         <div className="col">
-          <label>Project</label>
-          <select value={activeProject ?? ""} onChange={(e) => setActiveProject(e.target.value || null)}>
-            <option value="">(select)</option>
-            {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          <label>{t("factory.project")}</label>
+          <Select
+            block
+            value={activeProject ?? ""}
+            onChange={(id) => setActiveProject(id || null)}
+            placeholder={t("common.selectPlaceholder")}
+            options={projects.map((p) => ({ value: p.id, label: p.name }))}
+          />
         </div>
         <div className="col">
-          <label>Target language</label>
-          <select value={language} onChange={(e) => setLanguage(e.target.value)}>
-            {languages.map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
+          <label>{t("factory.targetLanguage")}</label>
+          <Select
+            block
+            value={language}
+            onChange={setLanguage}
+            options={languages.map((l) => ({ value: l, label: l }))}
+          />
         </div>
         {language === "rust" && (
           <div className="col">
-            <label>Rust LLM client</label>
-            <select value={rustClient} onChange={(e) => setRustClient(e.target.value)}>
-              <option value="std">std-only (offline mock)</option>
-              <option value="reqwest">reqwest (real OpenAI-compatible)</option>
-            </select>
+            <label>{t("factory.rustClient")}</label>
+            <Select
+              block
+              value={rustClient}
+              onChange={setRustClient}
+              options={[
+                { value: "std", label: t("factory.rustStd") },
+                { value: "reqwest", label: t("factory.rustReqwest") },
+              ]}
+            />
           </div>
         )}
         {language === "typescript" && (
           <div className="col">
-            <label>TypeScript LLM client</label>
-            <select value={tsClient} onChange={(e) => setTsClient(e.target.value)}>
-              <option value="fetch">fetch (built-in)</option>
-              <option value="openai">openai (npm SDK)</option>
-            </select>
+            <label>{t("factory.tsClient")}</label>
+            <Select
+              block
+              value={tsClient}
+              onChange={setTsClient}
+              options={[
+                { value: "fetch", label: t("factory.tsFetch") },
+                { value: "openai", label: t("factory.tsOpenai") },
+              ]}
+            />
           </div>
         )}
-        <div className="col" style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-          <button className="primary" disabled={!activeProject} onClick={generate}>Generate</button>
-          <button className="ghost" disabled={!activeProject} onClick={download}>Download .zip</button>
+        <div className="col" style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", flex: "0 0 auto" }}>
+          <div className="panel-actions">
+            <button type="button" className="btn btn-primary" disabled={!activeProject} onClick={generate}>{t("common.generate")}</button>
+            <button type="button" className="btn" disabled={!activeProject} onClick={download}>{t("factory.downloadZip")}</button>
+          </div>
         </div>
       </div>
-      {err && <div className="err">{err}</div>}
+      {msg && <div className="muted panel-intro">{msg}</div>}
+      {err && <div className="err panel-intro">{err}</div>}
 
-      {Object.keys(files).length > 0 && (
-        <div className="row" style={{ marginTop: 12 }}>
-          <div className="col" style={{ maxWidth: 280 }}>
-            {Object.keys(files).map((f) => (
+      {fileKeys.length > 0 && (
+        <div className="factory-output">
+          <div className="factory-files">
+            {fileKeys.map((f) => (
               <div key={f} className="card" style={{ cursor: "pointer", borderColor: selected === f ? "var(--accent)" : undefined }} onClick={() => setSelected(f)}>
                 {f}
               </div>
             ))}
           </div>
-          <div className="col">
+          <div className="factory-code-col">
             <div className="code">{files[selected]}</div>
           </div>
         </div>

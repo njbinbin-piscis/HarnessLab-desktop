@@ -1,7 +1,7 @@
+use harness_rt::agent::tool::ToolRegistry;
+use harness_rt::policy::PolicyGate;
 use harnesslab_core::config::AgentConfig;
 use harnesslab_core::loader::build_harness_config;
-use piscis_kernel::agent::tool::ToolRegistry;
-use piscis_kernel::policy::PolicyGate;
 use std::sync::Arc;
 
 /// Runs a benchmark test for a given configuration file.

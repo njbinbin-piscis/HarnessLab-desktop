@@ -42,7 +42,9 @@ fn project_for(coordinator: Option<&str>) -> Project {
 fn main() {
     let mut args = std::env::args().skip(1);
     let lang = args.next().unwrap_or_else(|| "rust".to_string());
-    let out = args.next().unwrap_or_else(|| "/tmp/harnesslab-gen".to_string());
+    let out = args
+        .next()
+        .unwrap_or_else(|| "/tmp/harnesslab-gen".to_string());
     let coordinator = args.next();
 
     let project = project_for(coordinator.as_deref());

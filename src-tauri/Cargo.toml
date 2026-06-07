@@ -1,6 +1,6 @@
 [package]
 name = "harnesslab-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "HarnessLab Desktop — a Tauri v2 desktop app to design, run and ship multi-agent harnesses."
 authors = ["HarnessLab"]
 license = "MIT"
@@ -20,7 +20,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 harnesslab-core = { path = "../crates/harnesslab-core" }
-piscis-kernel = { workspace = true }
+harness-rt = { workspace = true }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
@@ -33,6 +33,11 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
+
+# ClawHub skill marketplace (search + install of SKILL.md packages).
+reqwest = { workspace = true }
+urlencoding = "2"
+zip = "2"
 
 # SQLite (bundled - no external dll needed) for the local project/run store.
 rusqlite = { version = "0.31", features = ["bundled"] }

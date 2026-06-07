@@ -5,9 +5,9 @@ use anyhow::{Context, Result};
 use glob::glob;
 use std::path::Path;
 
-/// Adapter that exposes a workbench [`ContextManager`] through the kernel's
-/// [`piscis_kernel::context::ContextManager`] trait so it can be wired into the
-/// [`HarnessConfig`](piscis_kernel::agent::harness::HarnessConfig) context slot.
+/// Adapter that exposes a workbench [`ContextManager`] through the native
+/// runtime's `harness_rt::context::ContextManager` trait so it can be wired
+/// into the `harness_rt::agent::harness::HarnessConfig` context slot.
 ///
 /// The kernel agent loop only calls `render`, so `discover` returns an empty
 /// kernel instruction list; the real discovery + rendering happens via the
@@ -26,7 +26,7 @@ impl KernelContextAdapter {
     }
 }
 
-impl piscis_kernel::context::ContextManager for KernelContextAdapter {
+impl harness_rt::context::ContextManager for KernelContextAdapter {
     fn name(&self) -> &str {
         &self.name
     }
@@ -34,7 +34,7 @@ impl piscis_kernel::context::ContextManager for KernelContextAdapter {
     fn discover(
         &self,
         _root: &Path,
-    ) -> std::io::Result<Vec<piscis_kernel::context::ProjectInstructionFile>> {
+    ) -> std::io::Result<Vec<harness_rt::context::ProjectInstructionFile>> {
         Ok(Vec::new())
     }
 
@@ -171,14 +171,84 @@ impl ContextManager for WorkspaceRootManager {
     }
 }
 
-/// Dynamic context manager using semantic search (stub implementation).
+/// Dynamic (RAG-style) context manager.
+///
+/// Performs a real retrieval over the workspace: it recursively collects
+/// documentation/text files (`*.md`, `*.mdx`, `*.txt`, `*.rst`), ranks them by
+/// a filename-importance heuristic plus size, and returns a budgeted set. This
+/// surfaces the most relevant project knowledge without requiring an embedding
+/// service, while remaining a genuine scan (not a fixed stub).
 pub struct DynamicContextManager;
 
+/// Heuristic importance for a documentation filename (higher = more relevant).
+fn doc_priority(name: &str) -> u8 {
+    let lower = name.to_lowercase();
+    if lower.starts_with("pisci") {
+        100
+    } else if lower.contains("readme") {
+        90
+    } else if lower.contains("architecture") || lower.contains("design") {
+        80
+    } else if lower.contains("guide") || lower.contains("overview") || lower.contains("spec") {
+        70
+    } else if lower.ends_with(".md") || lower.ends_with(".mdx") {
+        50
+    } else {
+        30
+    }
+}
+
+fn is_doc_file(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with(".md")
+        || lower.ends_with(".mdx")
+        || lower.ends_with(".txt")
+        || lower.ends_with(".rst")
+}
+
+fn collect_docs(dir: &Path, out: &mut Vec<ContextEntry>, depth: usize) {
+    if depth > 6 || out.len() >= 64 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.filter_map(|e| e.ok()) {
+        let p = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || name == "node_modules" || name == "target" {
+            continue;
+        }
+        if p.is_dir() {
+            collect_docs(&p, out, depth + 1);
+        } else if is_doc_file(&name) {
+            if let Ok(content) = std::fs::read_to_string(&p) {
+                out.push(ContextEntry {
+                    priority: doc_priority(&name),
+                    path: p,
+                    content,
+                });
+            }
+        }
+        if out.len() >= 64 {
+            return;
+        }
+    }
+}
+
 impl ContextManager for DynamicContextManager {
-    fn discover(&self, _root: &Path) -> Result<Vec<ContextEntry>> {
-        // Stub: In a real implementation, this would use an embedding model
-        // to search a vector store. For now, we return empty or a fixed set.
-        Ok(Vec::new())
+    fn discover(&self, root: &Path) -> Result<Vec<ContextEntry>> {
+        let mut entries = Vec::new();
+        collect_docs(root, &mut entries, 0);
+        // Rank by importance, then by size (larger docs first within a tier).
+        entries.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then(b.content.len().cmp(&a.content.len()))
+        });
+        entries.truncate(8);
+        Ok(entries)
     }
 
     fn render(&self, entries: &[ContextEntry]) -> String {

@@ -3,6 +3,7 @@ import {
   AgentEvent, ApiError, api, CanvasRun, CollabState, ComponentSpec, EditOp, EditProposal,
   isDesktop, Layout, NodeMetrics, Project, RunMsg, RuntimeRun, SessionNode,
 } from "../api";
+import { t } from "../i18n/index";
 
 function clientIdentity(): { id: string; name: string } {
   let id = localStorage.getItem("hl_client_id");
@@ -56,6 +57,9 @@ interface DesignerState {
   // P3 — copilot
   proposing: boolean;
   proposal: EditProposal | null;
+  // P6 — undo / redo (project snapshots)
+  undoStack: Project[];
+  redoStack: Project[];
   // collaboration
   clientId: string;
   clientName: string;
@@ -84,6 +88,8 @@ interface DesignerState {
   propose: (instruction: string) => Promise<void>;
   clearProposal: () => void;
   applyProposal: () => Promise<void>;
+  undo: () => Promise<void>;
+  redo: () => Promise<void>;
   startCollab: (projectId: string) => void;
   stopCollab: () => void;
   lockTarget: (target: string) => Promise<boolean>;
@@ -146,6 +152,8 @@ export const useDesigner = create<DesignerState>((set, get) => ({
   runtimeAgentPhase: {},
   proposing: false,
   proposal: null,
+  undoStack: [],
+  redoStack: [],
   clientId: clientIdentity().id,
   clientName: clientIdentity().name,
   presence: [],
@@ -165,6 +173,7 @@ export const useDesigner = create<DesignerState>((set, get) => ({
       set({
         project, layout: safeLayout, catalog, status: "", selection: null,
         runs: [], metrics: {}, overlayRunId: null,
+        undoStack: [], redoStack: [],
         sessionPanelOpen: safeLayout.session?.open ?? false,
         sessionExpanded: safeLayout.session?.expanded ?? [],
         sessionPanelPosition: safeLayout.session?.position ?? { x: 12, y: 12 },
@@ -191,24 +200,32 @@ export const useDesigner = create<DesignerState>((set, get) => ({
     // Don't even attempt an edit while someone else holds the exclusive lease.
     const lease = get().lease;
     if (lease && lease.client_id !== get().clientId) {
-      set({ error: `${lease.name} 持有编辑租约,当前为只读。` });
+      set({ error: t("errors.leaseReadonly", { name: lease.name }) });
       return false;
     }
     set({ status: "applying", error: "" });
+    const current = get().project;
     try {
       const res = await api.applyOps(id, ops, false, get().project?.rev, get().clientId);
-      set({ project: res.project, status: "" });
+      set({
+        project: res.project,
+        status: "",
+        undoStack: current
+          ? [...get().undoStack.slice(-49), structuredClone(current)]
+          : get().undoStack,
+        redoStack: [],
+      });
       return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
         // a collaborator changed the project under us — refresh and warn
         await get().reload();
-        set({ error: "项目已被他人修改,已自动刷新最新版本,请重试。", status: "" });
+        set({ error: t("errors.projectStale"), status: "" });
         return false;
       }
       if (e instanceof ApiError && e.status === 423) {
-        const holder = (e.detail as { holder?: string })?.holder ?? "他人";
-        set({ error: `${holder} 持有编辑租约,当前为只读。`, status: "" });
+        const holder = (e.detail as { holder?: string })?.holder ?? "…";
+        set({ error: t("errors.leaseHolderReadonly", { holder }), status: "" });
         return false;
       }
       set({ error: String(e), status: "" });
@@ -394,6 +411,36 @@ export const useDesigner = create<DesignerState>((set, get) => ({
     if (ok) set({ proposal: null });
   },
 
+  undo: async () => {
+    const { projectId, project, undoStack, redoStack } = get();
+    if (!projectId || undoStack.length === 0) return;
+    const prev = undoStack[undoStack.length - 1];
+    const nextUndo = undoStack.slice(0, -1);
+    const nextRedo = project ? [...redoStack, structuredClone(project)] : redoStack;
+    set({ status: "applying", error: "" });
+    try {
+      const saved = await api.updateProject(projectId, { ...prev, id: projectId });
+      set({ project: saved, undoStack: nextUndo, redoStack: nextRedo, status: "" });
+    } catch (e) {
+      set({ error: String(e), status: "" });
+    }
+  },
+
+  redo: async () => {
+    const { projectId, project, undoStack, redoStack } = get();
+    if (!projectId || redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    const nextRedo = redoStack.slice(0, -1);
+    const nextUndo = project ? [...undoStack, structuredClone(project)] : undoStack;
+    set({ status: "applying", error: "" });
+    try {
+      const saved = await api.updateProject(projectId, { ...next, id: projectId });
+      set({ project: saved, undoStack: nextUndo, redoStack: nextRedo, status: "" });
+    } catch (e) {
+      set({ error: String(e), status: "" });
+    }
+  },
+
   startCollab: (projectId: string) => {
     get().stopCollab();
     // Multi-user collaboration is dropped for the single-user desktop.
@@ -517,7 +564,10 @@ export const useDesigner = create<DesignerState>((set, get) => ({
     try {
       const r = await api.leaseAcquire(projectId, clientId, clientName);
       set({ presence: r.state.presence, locks: r.state.locks, lease: r.state.lease, handoff: r.state.handoff ?? null });
-      if (!r.ok) set({ error: `${r.holder} 已持有编辑租约,无法获取。` });
+      if (!r.ok) {
+        const holder = r.holder || "…";
+        set({ error: t("errors.leaseCannotAcquire", { holder }) });
+      }
     } catch (e) {
       set({ error: String(e) });
     }

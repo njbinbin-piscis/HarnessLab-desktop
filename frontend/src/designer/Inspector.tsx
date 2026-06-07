@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { AgentSpec, ComponentSpec, Ref, api } from "../api";
+import { useT } from "../i18n/context";
 import { useDesigner } from "./store";
+import { Select } from "../components/Select";
 
 const LIFECYCLE_SLOTS = [
   "credentials", "capabilities", "skills", "prompt",
@@ -8,6 +10,7 @@ const LIFECYCLE_SLOTS = [
 ] as const;
 
 function EmbeddingControl({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const t = useT();
   const [status, setStatus] = useState<{ ok?: boolean; model?: string } | null>(null);
   useEffect(() => {
     if (value === "openai") {
@@ -19,14 +22,19 @@ function EmbeddingControl({ value, onChange }: { value: string; onChange: (v: st
   return (
     <div className="insp-embed">
       <span className="insp-embed-label">embedding</span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="bow">bow (local)</option>
-        <option value="hashing">hashing (local)</option>
-        <option value="openai">openai / BGE-M3 (model)</option>
-      </select>
+      <Select
+        block
+        value={value}
+        onChange={onChange}
+        options={[
+          { value: "bow", label: t("inspector.embeddingBow") },
+          { value: "hashing", label: t("inspector.embeddingHash") },
+          { value: "openai", label: t("inspector.embeddingOpenai") },
+        ]}
+      />
       {status ? (
         <span className={"insp-embed-dot " + (status.ok ? "ok" : "warn")} title={status.model}>
-          {status.ok ? `● live (${status.model})` : "● endpoint unreachable — using fallback"}
+          {status.ok ? t("inspector.embedLive", { model: status.model ?? "" }) : t("inspector.embedFallback")}
         </span>
       ) : null}
     </div>
@@ -42,19 +50,20 @@ function SlotEditor({ agentName, slot, value }: { agentName: string; slot: strin
     <div className="insp-slot">
       <div className="insp-field">
         <span>{slot}</span>
-        <select
+        <Select
+          block
           value={ref?.name ?? ""}
-          onChange={(e) =>
-            e.target.value
-              ? applyOps([{ op: "set_slot", agent: agentName, kind: slot, ref: e.target.value }])
+          onChange={(name) =>
+            name
+              ? applyOps([{ op: "set_slot", agent: agentName, kind: slot, ref: name }])
               : applyOps([{ op: "clear_slot", agent: agentName, kind: slot }])
           }
-        >
-          <option value="">—</option>
-          {options(catalog, slot).map((n) => (
-            <option key={n} value={n}>{n}</option>
-          ))}
-        </select>
+          placeholder="—"
+          options={[
+            { value: "", label: "—" },
+            ...options(catalog, slot).map((n) => ({ value: n, label: n })),
+          ]}
+        />
       </div>
       {ref && specOf(catalog, slot, ref.name)?.params_schema?.embedding ? (
         <EmbeddingControl
@@ -107,6 +116,7 @@ function ParamsEditor({ value, onCommit }: { value: Record<string, unknown>; onC
 }
 
 function AgentInspector({ agent }: { agent: AgentSpec }) {
+  const t = useT();
   const { catalog, applyOps, locks, clientId } = useDesigner();
   const [name, setName] = useState(agent.name);
 
@@ -118,7 +128,7 @@ function AgentInspector({ agent }: { agent: AgentSpec }) {
   return (
     <div className="insp-body">
       {lockedByOther ? (
-        <div className="insp-lock-banner">🔒 {lock.name} 正在编辑该 agent,你的修改可能与之冲突。</div>
+        <div className="insp-lock-banner">🔒 {t("inspector.lockBanner", { name: lock.name })}</div>
       ) : null}
       <label className="insp-field">
         <span>name</span>
@@ -172,45 +182,49 @@ function AgentInspector({ agent }: { agent: AgentSpec }) {
       </div>
 
       <button className="btn danger insp-del" onClick={() => applyOps([{ op: "remove_agent", name: agent.name }])}>
-        Delete agent
+        {t("inspector.deleteAgent")}
       </button>
     </div>
   );
 }
 
 function TopologyInspector() {
+  const tr = useT();
   const { project, catalog, applyOps } = useDesigner();
   if (!project) return null;
-  const t = project.topology;
+  const topo = project.topology;
   return (
     <div className="insp-body">
       <label className="insp-field">
         <span>mode</span>
-        <select
-          value={t.mode}
-          onChange={(e) =>
-            e.target.value === "coordinated"
+        <Select
+          block
+          value={topo.mode}
+          onChange={(mode) =>
+            mode === "coordinated"
               ? applyOps([{ op: "set_topology", mode: "coordinated", coordinator: options(catalog, "coordinator")[0] ?? "router" }])
               : applyOps([{ op: "set_topology", mode: "single" }])
           }
-        >
-          <option value="single">single</option>
-          <option value="coordinated">coordinated</option>
-        </select>
+          options={[
+            { value: "single", label: tr("projects.modeSingle") },
+            { value: "coordinated", label: tr("projects.modeCoordinated") },
+          ]}
+        />
       </label>
-      {t.mode === "coordinated" ? (
+      {topo.mode === "coordinated" ? (
         <label className="insp-field">
           <span>coordinator</span>
-          <select value={t.coordinator?.name ?? ""} onChange={(e) => applyOps([{ op: "set_topology", mode: "coordinated", coordinator: e.target.value }])}>
-            {options(catalog, "coordinator").map((n) => (
-              <option key={n} value={n}>{n}</option>
-            ))}
-          </select>
+          <Select
+            block
+            value={topo.coordinator?.name ?? ""}
+            onChange={(name) => applyOps([{ op: "set_topology", mode: "coordinated", coordinator: name }])}
+            options={options(catalog, "coordinator").map((n) => ({ value: n, label: n }))}
+          />
         </label>
       ) : null}
-      <div className="insp-section">Agent order</div>
+      <div className="insp-section">{tr("inspector.agentOrder")}</div>
       <ol className="insp-order">
-        {t.agent_order.map((n) => (
+        {topo.agent_order.map((n) => (
           <li key={n}>{n}</li>
         ))}
       </ol>
@@ -219,43 +233,46 @@ function TopologyInspector() {
 }
 
 function ScorerInspector() {
+  const t = useT();
   const { project, catalog, applyOps } = useDesigner();
   if (!project) return null;
   return (
     <div className="insp-body">
       <label className="insp-field">
         <span>scorer</span>
-        <select
+        <Select
+          block
           value={project.scorer?.name ?? ""}
-          onChange={(e) => (e.target.value ? applyOps([{ op: "set_scorer", ref: e.target.value }]) : applyOps([{ op: "clear_scorer" }]))}
-        >
-          <option value="">—</option>
-          {options(catalog, "scorer").map((n) => (
-            <option key={n} value={n}>{n}</option>
-          ))}
-        </select>
+          onChange={(name) => (name ? applyOps([{ op: "set_scorer", ref: name }]) : applyOps([{ op: "clear_scorer" }]))}
+          placeholder="—"
+          options={[
+            { value: "", label: "—" },
+            ...options(catalog, "scorer").map((n) => ({ value: n, label: n })),
+          ]}
+        />
       </label>
-      <p className="muted" style={{ fontSize: 12 }}>Default scorer used by evaluation runs when none is chosen explicitly.</p>
+      <p className="muted" style={{ fontSize: 12 }}>{t("inspector.scorerHint")}</p>
     </div>
   );
 }
 
 export function Inspector() {
+  const t = useT();
   const { selection, project } = useDesigner();
-  if (!project) return <aside className="inspector"><div className="insp-empty">No project loaded.</div></aside>;
-  let title = "Inspector";
-  let body = <div className="insp-empty">Select a node to edit its properties.</div>;
+  if (!project) return <aside className="inspector"><div className="insp-empty">{t("inspector.noProject")}</div></aside>;
+  let title = t("inspector.title");
+  let body = <div className="insp-empty">{t("inspector.selectNode")}</div>;
   if (selection?.type === "agent") {
     const agent = project.agents.find((a) => a.name === selection.id);
     if (agent) {
-      title = `Agent · ${agent.name}`;
+      title = `${t("inspector.agent")} · ${agent.name}`;
       body = <AgentInspector key={agent.name} agent={agent} />;
     }
   } else if (selection?.type === "topology") {
-    title = "Topology";
+    title = t("inspector.topology");
     body = <TopologyInspector />;
   } else if (selection?.type === "scorer") {
-    title = "Scorer";
+    title = t("inspector.scorer");
     body = <ScorerInspector />;
   }
   return (

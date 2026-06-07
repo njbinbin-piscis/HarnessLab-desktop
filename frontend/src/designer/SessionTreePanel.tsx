@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SessionNode } from "../api";
+import { useT } from "../i18n/context";
 import { useDesigner } from "./store";
 
 /** Compact session tree overlay on the main canvas (no Dock required). */
 export function SessionTreePanel({ onClose }: { onClose: () => void }) {
+  const t = useT();
   const {
     session, sessionRoots, loadSession, loadRuns,
     forkParent, forkTurn, setForkParent,
@@ -125,9 +127,9 @@ export function SessionTreePanel({ onClose }: { onClose: () => void }) {
               <button
                 className="cst-act"
                 onClick={(e) => { e.stopPropagation(); forkFromTurn(n.run_id!, n.turn!); }}
-                title="从该回合分叉"
+                title={t("session.forkFromTurn")}
               >
-                分叉
+                {t("common.fork")}
               </button>
             </>
           ) : (
@@ -137,9 +139,9 @@ export function SessionTreePanel({ onClose }: { onClose: () => void }) {
               <button
                 className="cst-act"
                 onClick={(e) => { e.stopPropagation(); forkFromRun(n.id); }}
-                title="从整次运行分叉"
+                title={t("session.forkFromRun")}
               >
-                分叉
+                {t("common.fork")}
               </button>
             </>
           )}
@@ -155,17 +157,17 @@ export function SessionTreePanel({ onClose }: { onClose: () => void }) {
       style={{ left: sessionPanelPosition.x, top: sessionPanelPosition.y, right: "auto" }}
     >
       <div className="cst-head" onMouseDown={onHeadMouseDown}>
-        <span>Session 树</span>
-        <span className="muted" style={{ fontSize: 11 }}>点击节点 overlay 指标 · 分叉可直接运行</span>
+        <span>{t("session.title")}</span>
+        <span className="muted" style={{ fontSize: 11 }}>{t("session.hint")}</span>
         <span className="spacer" />
         {overlayRunId ? (
-          <button className="btn" onClick={() => showRunOnCanvas(null)}>清除 overlay</button>
+          <button type="button" className="btn btn-sm" onClick={() => showRunOnCanvas(null)}>{t("session.clearOverlay")}</button>
         ) : null}
-        <button className="btn" onClick={onClose}>×</button>
+        <button type="button" className="btn btn-sm" onClick={onClose}>×</button>
       </div>
       <div className="cst-body">
         {session.length === 0 ? (
-          <span className="muted" style={{ fontSize: 12 }}>暂无运行 — 在 Dock 里 Run 一次即可生成。</span>
+          <span className="muted" style={{ fontSize: 12 }}>{t("session.noRuns")}</span>
         ) : (
           (sessionRoots.length ? sessionRoots : Object.keys(childrenOf))
             .map((rid) => session.find((n) => n.id === rid && n.type !== "turn"))
@@ -176,18 +178,18 @@ export function SessionTreePanel({ onClose }: { onClose: () => void }) {
       {forkParent ? (
         <div className="cst-fork-bar">
           <span className="muted" style={{ fontSize: 11 }}>
-            分叉自 {forkParent.slice(0, 8)}{forkTurn != null ? ` · T${forkTurn}` : ""}
+            {t("session.forkedFrom")} {forkParent.slice(0, 8)}{forkTurn != null ? ` · T${forkTurn}` : ""}
           </span>
           <input
             value={task}
             onChange={(e) => setTask(e.target.value)}
-            placeholder="Task…"
+            placeholder={t("common.taskPlaceholder")}
             onKeyDown={(e) => e.key === "Enter" && !running && runTask(task)}
           />
-          <button className="btn primary" disabled={running} onClick={() => runTask(task)}>
-            {running ? "…" : "Run"}
+          <button type="button" className="btn btn-primary" disabled={running} onClick={() => runTask(task)}>
+            {running ? "…" : t("common.run")}
           </button>
-          <button className="btn" onClick={() => setForkParent(null)}>取消</button>
+          <button type="button" className="btn" onClick={() => setForkParent(null)}>{t("session.cancel")}</button>
         </div>
       ) : null}
     </div>

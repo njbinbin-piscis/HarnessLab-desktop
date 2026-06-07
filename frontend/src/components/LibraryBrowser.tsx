@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ComponentReference, ComponentSpec } from "../api";
+import { useT } from "../i18n/context";
 import { CodeBlock } from "./CodeBlock";
 import { EmbeddingStatus } from "./EmbeddingStatus";
 
@@ -8,6 +9,7 @@ const KIND_ORDER = ["loop", "compaction", "memory", "context", "coordinator", "s
 type Selected = { kind: string; name: string };
 
 export function LibraryBrowser() {
+  const t = useT();
   const [catalog, setCatalog] = useState<Record<string, ComponentSpec[]>>({});
   const [query, setQuery] = useState("");
   const [kindFilter, setKindFilter] = useState<string>("all");
@@ -41,18 +43,18 @@ export function LibraryBrowser() {
   }, [catalog, selected]);
 
   return (
-    <div className="lib">
+    <div className="lib page-fill">
       <aside className="lib-aside">
         <div className="lib-search">
           <input
-            placeholder="Search algorithms…"
+            placeholder={t("library.search")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
         <div className="kind-filter">
           <span className={"chip" + (kindFilter === "all" ? " active" : "")} onClick={() => setKindFilter("all")}>
-            all
+            {t("library.all")}
           </span>
           {KIND_ORDER.map((k) => (
             <span key={k} className={"chip" + (kindFilter === k ? " active" : "")} onClick={() => setKindFilter(k)}>
@@ -60,8 +62,8 @@ export function LibraryBrowser() {
             </span>
           ))}
         </div>
-        <button className="ghost" style={{ width: "100%", marginBottom: 8 }} onClick={() => api.reloadLibrary().then(load)}>
-          ↻ Hot-reload plugins
+        <button type="button" className="btn" style={{ width: "100%", marginBottom: 8 }} onClick={() => api.reloadLibrary().then(load)}>
+          {t("library.hotReload")}
         </button>
         <EmbeddingStatus />
         {err && <div className="err">{err}</div>}
@@ -90,19 +92,24 @@ export function LibraryBrowser() {
               })}
             </div>
           ))}
-          {groups.length === 0 && <div className="empty">No components match “{query}”.</div>}
+          {groups.length === 0 && <div className="empty">{t("library.noMatch", { query })}</div>}
         </div>
       </aside>
 
       <section className="panel">
-        {!selectedSpec && <div className="empty">Select an algorithm to view its details and reference code.</div>}
-        {selectedSpec && selected && <ComponentDetail kind={selected.kind} spec={selectedSpec} />}
+        {!selectedSpec && <div className="empty">{t("library.emptySelect")}</div>}
+        {selectedSpec && selected && (
+          <div className="lib-detail-scroll">
+            <ComponentDetail kind={selected.kind} spec={selectedSpec} />
+          </div>
+        )}
       </section>
     </div>
   );
 }
 
 function ComponentDetail({ kind, spec }: { kind: string; spec: ComponentSpec }) {
+  const t = useT();
   const [ref, setRef] = useState<ComponentReference | null>(null);
   const [lang, setLang] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -126,11 +133,11 @@ function ComponentDetail({ kind, spec }: { kind: string; spec: ComponentSpec }) 
         <span className="kind">{kind}</span>
         <span className={"badge " + (spec.source || "builtin")}>{spec.source || "builtin"}</span>
       </div>
-      <div className="detail-desc">{spec.description || "No description."}</div>
+      <div className="detail-desc">{spec.description || t("library.noDescription")}</div>
 
       {params.length > 0 && (
         <>
-          <h3>Parameters</h3>
+          <h3>{t("library.parameters")}</h3>
           <table className="params-table">
             <thead><tr><th>name</th><th>schema</th></tr></thead>
             <tbody>
@@ -145,13 +152,10 @@ function ComponentDetail({ kind, spec }: { kind: string; spec: ComponentSpec }) 
         </>
       )}
 
-      <h3>Reference implementation</h3>
-      {loading && <div className="muted">Loading reference code…</div>}
+      <h3>{t("library.reference")}</h3>
+      {loading && <div className="muted">{t("library.loadingRef")}</div>}
       {!loading && !ref && (
-        <div className="muted">
-          No curated reference snippet yet for this component. It still runs in the engine and can be
-          generated via the Factory.
-        </div>
+        <div className="muted">{t("library.noRef")}</div>
       )}
       {ref && (
         <>
@@ -163,9 +167,7 @@ function ComponentDetail({ kind, spec }: { kind: string; spec: ComponentSpec }) 
             ))}
           </div>
           {lang && <CodeBlock code={ref.snippets[lang]} title={`${spec.name}.${lang}`} />}
-          <div className="muted" style={{ marginTop: 8 }}>
-            Copy this into your project, or let the Factory emit a full codebase wired with this component.
-          </div>
+          <div className="muted" style={{ marginTop: 8 }}>{t("library.copyHint")}</div>
         </>
       )}
     </div>
