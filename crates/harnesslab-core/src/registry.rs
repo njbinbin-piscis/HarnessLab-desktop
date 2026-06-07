@@ -5,7 +5,7 @@
 //! for now) JSON-Schema-ish `params_schema`; later phases populate schemas and
 //! real reference snippets, and make the catalog hot-reloadable from packages.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -120,6 +120,23 @@ pub fn catalog() -> BTreeMap<String, Vec<ComponentSpec>> {
         });
     }
     out
+}
+
+/// Component names grouped by kind — the validation table for the Edit-Ops
+/// engine (`set_slot`, `set_topology` coordinator, `set_scorer`, …).
+pub fn names_by_kind() -> BTreeMap<String, BTreeSet<String>> {
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (kind, name, _desc) in COMPONENTS {
+        out.entry((*kind).to_string())
+            .or_default()
+            .insert((*name).to_string());
+    }
+    out
+}
+
+/// The set of built-in tool names.
+pub fn tool_names() -> BTreeSet<String> {
+    TOOLS.iter().map(|(name, _)| (*name).to_string()).collect()
 }
 
 /// The built-in tool list.

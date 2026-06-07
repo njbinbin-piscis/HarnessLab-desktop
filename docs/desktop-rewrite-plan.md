@@ -142,9 +142,9 @@ agent-workbench/                # 重写后即 HarnessLab Desktop
 
 | 阶段 | 交付物 | 验收标准 |
 | --- | --- | --- |
-| **P0 桌面骨架** ⬜ | 照 openpiscis 起 Tauri v2 壳；移植前端跑通空壳；建 workspace 与 `harnesslab-core`，迁入现有 6 个 `.rs`；删 Python | `tauri dev` 打开窗口、前端加载；`cargo build` 通过；仓库无 `.py` |
-| **P1 模型 + 注册表 + 只读画布** ⬜ | `Project/AgentSpec/Topology`(serde) + 统一 registry catalog；command 供数据，画布只读渲染 + 点选 Inspector | 任意 project 正确可视化；catalog 列出 kernel + 自带算法 |
-| **P2 Edit Ops + 双向编辑** ⬜ | 事务性 ops 引擎（校验/diff/apply）+ `rusqlite` 存储 + Layout 持久化；拖拽改槽/连线/挂工具回写 | ops 单测（合法/非法引用/schema 越界）；编辑→存→重载一致 |
+| **P0 桌面骨架** ✅ | 照 openpiscis 起 Tauri v2 壳；移植前端跑通空壳；建 workspace 与 `harnesslab-core`，迁入现有 6 个 `.rs`；删 Python | `tauri dev` 打开窗口、前端加载；`cargo build` 通过；仓库无 `.py` |
+| **P1 模型 + 注册表 + 只读画布** ✅ | `Project/AgentSpec/Topology`(serde) + 统一 registry catalog；command 供数据，画布只读渲染 + 点选 Inspector | 任意 project 正确可视化；catalog 列出 kernel + 自带算法 |
+| **P2 Edit Ops + 双向编辑** ✅ | 事务性 ops 引擎（`ops.rs` 校验/diff/apply，全集 op）+ `rusqlite`(bundled) 存储 + Layout 落库；`apply_ops` 命令带 base_rev 乐观并发、422/409/404 错误负载 | ops/store 单测（合法/非法引用/dry-run/stale rev）；编辑→存→重载一致 |
 | **P3 运行台 + 监控** ⬜ | 经 kernel 跑单/多 agent；Tauri event 流式回放；节点指标叠加 + RunMonitor + Session/History | 画布跑任务、事件实时点亮、指标回填；可分叉重跑 |
 | **P4 Factory 代码生成** ⬜ | IR + py/ts/rust 发射器；实时代码预览 | 生成 Rust 可编译、TS 可类型检查 |
 | **P5 Design Copilot** ⬜ | NL→校验 Edit Ops→diff→apply（规则 + 可选 LLM 规划器） | 指令产出合法 ops；diff 可审阅；非法 ops 被拒 |

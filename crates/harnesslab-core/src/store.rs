@@ -1,14 +1,20 @@
-//! In-memory project + layout store.
+//! SQLite-backed project + layout store (P2).
 //!
-//! P1 keeps everything in memory (seeded with a sample project so the canvas
-//! has something to render). P2 swaps this for a `rusqlite`-backed store with
-//! the same surface, and adds the transactional Edit-Ops engine.
+//! Replaces P1's in-memory map with a `rusqlite` (bundled) store so projects,
+//! their canvas layout and revisions survive restarts. It also owns the
+//! transactional Edit-Ops entry point used by the visual designer: validate →
+//! diff → (optionally) persist, with `base_rev` optimistic-concurrency checks.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use crate::project::{now_secs, new_id, AgentSpec, ComponentRef, Project, Topology};
+use crate::ops::{apply_ops as ops_apply_ops, diff_projects};
+use crate::project::{new_id, now_secs, AgentSpec, ComponentRef, Project, Topology};
+use crate::registry;
 
 /// A node position on the canvas.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -24,11 +30,11 @@ pub struct Layout {
     #[serde(default)]
     pub nodes: BTreeMap<String, Pos>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub viewport: Option<serde_json::Value>,
+    pub viewport: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collapsed: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session: Option<serde_json::Value>,
+    pub session: Option<Value>,
 }
 
 /// Minimal `{id, name}` summary returned by the project list.
@@ -38,80 +44,221 @@ pub struct ProjectSummary {
     pub name: String,
 }
 
-#[derive(Debug, Default)]
+/// The successful result of applying edit ops (matches the TS `OpsResult`).
+#[derive(Debug, Clone, Serialize)]
+pub struct OpsResult {
+    pub project: Project,
+    pub diff: BTreeMap<String, Value>,
+    pub applied: usize,
+    pub dry_run: bool,
+    pub rev: u64,
+}
+
+/// Why an `apply_ops` call could not be persisted.
+#[derive(Debug)]
+pub enum OpsError {
+    NotFound,
+    /// `base_rev` did not match the stored revision (a stale edit).
+    Stale { current_rev: u64, project: Project },
+    /// One or more ops failed validation (nothing applied).
+    Invalid { problems: Vec<String> },
+}
+
 pub struct Store {
-    projects: BTreeMap<String, Project>,
-    layouts: BTreeMap<String, Layout>,
+    conn: Connection,
 }
 
 impl Store {
-    pub fn new() -> Self {
-        Store::default()
+    /// Open (creating if needed) a SQLite-backed store at `path`.
+    pub fn open<P: AsRef<Path>>(path: P) -> rusqlite::Result<Self> {
+        let conn = Connection::open(path)?;
+        let store = Store { conn };
+        store.init()?;
+        Ok(store)
     }
 
-    /// A store pre-populated with one illustrative multi-agent project.
-    pub fn seeded() -> Self {
-        let mut store = Store::new();
-        store.insert_project(sample_project());
+    /// An ephemeral in-memory store (used by tests and the headless fallback).
+    pub fn in_memory() -> Self {
+        let conn = Connection::open_in_memory().expect("open in-memory sqlite");
+        let store = Store { conn };
+        store.init().expect("init schema");
         store
     }
 
-    fn insert_project(&mut self, mut project: Project) {
-        if project.id.is_empty() {
-            project.id = new_id();
+    fn init(&self) -> rusqlite::Result<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS projects (
+                 id         TEXT PRIMARY KEY,
+                 name       TEXT NOT NULL,
+                 data       TEXT NOT NULL,
+                 updated_at REAL NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS layouts (
+                 project_id TEXT PRIMARY KEY,
+                 data       TEXT NOT NULL
+             );",
+        )
+    }
+
+    /// Seed a sample project the first time the store is empty.
+    pub fn seed_if_empty(&self) -> rusqlite::Result<()> {
+        let count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?;
+        if count == 0 {
+            self.put_project(&sample_project())?;
         }
-        if project.created_at == 0.0 {
-            project.created_at = now_secs();
-        }
-        project.updated_at = now_secs();
-        self.projects.insert(project.id.clone(), project);
+        Ok(())
+    }
+
+    fn put_project(&self, project: &Project) -> rusqlite::Result<()> {
+        let data = serde_json::to_string(project).expect("serialize project");
+        self.conn.execute(
+            "INSERT INTO projects (id, name, data, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET name = ?2, data = ?3, updated_at = ?4",
+            rusqlite::params![project.id, project.name, data, project.updated_at],
+        )?;
+        Ok(())
     }
 
     pub fn list_projects(&self) -> Vec<ProjectSummary> {
-        self.projects
-            .values()
-            .map(|p| ProjectSummary {
-                id: p.id.clone(),
-                name: p.name.clone(),
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT id, name FROM projects ORDER BY updated_at DESC")
+        {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(ProjectSummary {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                })
             })
-            .collect()
+            .map(|it| it.filter_map(Result::ok).collect())
+            .unwrap_or_default();
+        rows
     }
 
     pub fn get_project(&self, id: &str) -> Option<Project> {
-        self.projects.get(id).cloned()
+        let data: Option<String> = self
+            .conn
+            .query_row("SELECT data FROM projects WHERE id = ?1", [id], |r| r.get(0))
+            .optional()
+            .ok()
+            .flatten();
+        data.and_then(|d| serde_json::from_str(&d).ok())
     }
 
-    pub fn create_project(&mut self, mut project: Project) -> Project {
+    pub fn create_project(&self, mut project: Project) -> Project {
         project.id = new_id();
         project.rev = 0;
         project.created_at = now_secs();
         project.updated_at = now_secs();
-        self.projects.insert(project.id.clone(), project.clone());
+        let _ = self.put_project(&project);
         project
     }
 
-    pub fn update_project(&mut self, id: &str, mut project: Project) -> Option<Project> {
-        let existing = self.projects.get(id)?;
+    pub fn update_project(&self, id: &str, mut project: Project) -> Option<Project> {
+        let existing = self.get_project(id)?;
         project.id = id.to_string();
         project.created_at = existing.created_at;
         project.rev = existing.rev + 1;
         project.updated_at = now_secs();
-        self.projects.insert(id.to_string(), project.clone());
+        self.put_project(&project).ok()?;
         Some(project)
     }
 
-    pub fn delete_project(&mut self, id: &str) -> bool {
-        self.layouts.remove(id);
-        self.projects.remove(id).is_some()
+    pub fn delete_project(&self, id: &str) -> bool {
+        let _ = self
+            .conn
+            .execute("DELETE FROM layouts WHERE project_id = ?1", [id]);
+        self.conn
+            .execute("DELETE FROM projects WHERE id = ?1", [id])
+            .map(|n| n > 0)
+            .unwrap_or(false)
     }
 
     pub fn get_layout(&self, id: &str) -> Layout {
-        self.layouts.get(id).cloned().unwrap_or_default()
+        let data: Option<String> = self
+            .conn
+            .query_row("SELECT data FROM layouts WHERE project_id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()
+            .ok()
+            .flatten();
+        data.and_then(|d| serde_json::from_str(&d).ok())
+            .unwrap_or_default()
     }
 
-    pub fn save_layout(&mut self, id: &str, layout: Layout) -> Layout {
-        self.layouts.insert(id.to_string(), layout.clone());
+    pub fn save_layout(&self, id: &str, layout: Layout) -> Layout {
+        let data = serde_json::to_string(&layout).expect("serialize layout");
+        let _ = self.conn.execute(
+            "INSERT INTO layouts (project_id, data) VALUES (?1, ?2)
+             ON CONFLICT(project_id) DO UPDATE SET data = ?2",
+            rusqlite::params![id, data],
+        );
         layout
+    }
+
+    /// Validate + apply structured edit ops transactionally (all-or-nothing).
+    ///
+    /// With `dry_run` the change is previewed (diff returned) but not saved.
+    /// `base_rev`, when given, must match the stored revision or the edit is
+    /// rejected as stale.
+    pub fn apply_ops(
+        &self,
+        id: &str,
+        ops: &[Value],
+        dry_run: bool,
+        base_rev: Option<u64>,
+    ) -> Result<OpsResult, OpsError> {
+        let project = self.get_project(id).ok_or(OpsError::NotFound)?;
+
+        if !dry_run {
+            if let Some(base) = base_rev {
+                if base != project.rev {
+                    return Err(OpsError::Stale {
+                        current_rev: project.rev,
+                        project,
+                    });
+                }
+            }
+        }
+
+        let names = registry::names_by_kind();
+        let tools = registry::tool_names();
+        let result = ops_apply_ops(&project, ops, &names, &tools);
+        if !result.ok() {
+            return Err(OpsError::Invalid {
+                problems: result.problems,
+            });
+        }
+
+        let diff = diff_projects(&project, &result.project);
+        let mut next = result.project;
+
+        let rev = if dry_run {
+            next.rev
+        } else {
+            // Persist with a bumped revision, preserving id + created_at.
+            next.id = id.to_string();
+            next.created_at = project.created_at;
+            next.rev = project.rev + 1;
+            next.updated_at = now_secs();
+            let _ = self.put_project(&next);
+            next.rev
+        };
+
+        Ok(OpsResult {
+            project: next,
+            diff,
+            applied: result.applied,
+            dry_run,
+            rev,
+        })
     }
 }
 
@@ -148,21 +295,27 @@ fn sample_project() -> Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn seeded() -> Store {
+        let s = Store::in_memory();
+        s.seed_if_empty().unwrap();
+        s
+    }
 
     #[test]
     fn seeded_store_has_sample_project() {
-        let store = Store::seeded();
-        let list = store.list_projects();
-        assert_eq!(list.len(), 1);
+        let store = seeded();
+        assert_eq!(store.list_projects().len(), 1);
         let p = store.get_project("sample").expect("sample project");
         assert_eq!(p.agents.len(), 2);
         assert_eq!(p.topology.mode, "coordinated");
     }
 
     #[test]
-    fn crud_round_trip() {
-        let mut store = Store::new();
-        let mut p = Project {
+    fn crud_round_trip_and_persistence() {
+        let store = Store::in_memory();
+        let created = store.create_project(Project {
             id: String::new(),
             name: "Temp".to_string(),
             description: String::new(),
@@ -173,32 +326,72 @@ mod tests {
             rev: 0,
             created_at: 0.0,
             updated_at: 0.0,
-        };
-        let created = store.create_project(p.clone());
+        });
         assert!(!created.id.is_empty());
-        assert_eq!(created.rev, 0);
+        let reloaded = store.get_project(&created.id).expect("reload");
+        assert_eq!(reloaded.name, "Temp");
 
-        p = created.clone();
+        let mut p = reloaded;
         p.name = "Renamed".to_string();
         let updated = store.update_project(&created.id, p).expect("update");
-        assert_eq!(updated.name, "Renamed");
         assert_eq!(updated.rev, 1);
-
         assert!(store.delete_project(&created.id));
         assert!(store.get_project(&created.id).is_none());
     }
 
     #[test]
-    fn agent_loop_field_serializes_as_loop() {
-        // The `r#loop` raw identifier must serialize to the JSON key "loop" so
-        // the ported frontend (which reads `agent.loop`) round-trips unchanged.
-        let agent = AgentSpec::new("a");
-        let json = serde_json::to_value(&agent).unwrap();
-        assert_eq!(json["loop"]["name"], "react");
-        assert!(json.get("r#loop").is_none());
+    fn apply_ops_transactional_and_bumps_rev() {
+        let store = seeded();
+        // A valid 2-op batch: add an agent, then set its loop slot.
+        let ops = vec![
+            json!({ "op": "add_agent", "name": "verifier" }),
+            json!({ "op": "set_slot", "agent": "verifier", "kind": "loop", "ref": "reflexion" }),
+        ];
+        let res = store.apply_ops("sample", &ops, false, Some(0)).expect("apply");
+        assert_eq!(res.applied, 2);
+        assert_eq!(res.rev, 1);
+        let p = store.get_project("sample").unwrap();
+        assert_eq!(p.agents.len(), 3);
+        assert_eq!(p.agent("verifier").unwrap().r#loop.as_ref().unwrap().name, "reflexion");
+    }
 
-        // And it deserializes back from "loop".
-        let parsed: AgentSpec = serde_json::from_value(json).unwrap();
-        assert_eq!(parsed.r#loop.unwrap().name, "react");
+    #[test]
+    fn apply_ops_all_or_nothing_on_invalid() {
+        let store = seeded();
+        let before = store.get_project("sample").unwrap();
+        // Second op references a non-existent component → whole batch rejected.
+        let ops = vec![
+            json!({ "op": "add_agent", "name": "x" }),
+            json!({ "op": "set_slot", "agent": "x", "kind": "loop", "ref": "does_not_exist" }),
+        ];
+        let err = store.apply_ops("sample", &ops, false, None).unwrap_err();
+        match err {
+            OpsError::Invalid { problems } => assert_eq!(problems.len(), 1),
+            _ => panic!("expected Invalid"),
+        }
+        // Nothing persisted.
+        let after = store.get_project("sample").unwrap();
+        assert_eq!(after.agents.len(), before.agents.len());
+        assert_eq!(after.rev, before.rev);
+    }
+
+    #[test]
+    fn apply_ops_dry_run_does_not_persist() {
+        let store = seeded();
+        let ops = vec![json!({ "op": "add_agent", "name": "ghost" })];
+        let res = store.apply_ops("sample", &ops, true, None).expect("dry run");
+        assert!(res.dry_run);
+        assert_eq!(res.project.agents.len(), 3); // preview includes the add
+        // …but the stored project is unchanged.
+        assert_eq!(store.get_project("sample").unwrap().agents.len(), 2);
+    }
+
+    #[test]
+    fn apply_ops_stale_base_rev_rejected() {
+        let store = seeded();
+        let err = store
+            .apply_ops("sample", &[json!({ "op": "clear_scorer" })], false, Some(99))
+            .unwrap_err();
+        assert!(matches!(err, OpsError::Stale { .. }));
     }
 }

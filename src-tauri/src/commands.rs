@@ -8,19 +8,20 @@ use std::sync::Mutex;
 
 use harnesslab_core::project::Project;
 use harnesslab_core::registry::{self, ComponentReference, ComponentSpec, ToolSpec};
-use harnesslab_core::store::{Layout, ProjectSummary, Store};
+use harnesslab_core::store::{Layout, OpsError, OpsResult, ProjectSummary, Store};
 use serde::Serialize;
+use serde_json::Value;
 use tauri::State;
 
-/// Shared application state: the in-memory project/layout store behind a mutex.
+/// Shared application state: the SQLite-backed project/layout store behind a mutex.
 pub struct AppState {
     pub store: Mutex<Store>,
 }
 
-impl Default for AppState {
-    fn default() -> Self {
+impl AppState {
+    pub fn new(store: Store) -> Self {
         AppState {
-            store: Mutex::new(Store::seeded()),
+            store: Mutex::new(store),
         }
     }
 }
@@ -121,6 +122,63 @@ pub fn get_layout(state: State<'_, AppState>, id: String) -> Layout {
 #[tauri::command]
 pub fn save_layout(state: State<'_, AppState>, id: String, layout: Layout) -> Layout {
     state.store.lock().unwrap().save_layout(&id, layout)
+}
+
+// ── Edit Ops (P2) ───────────────────────────────────────────────────────────
+
+/// Serializable error payload for `apply_ops`, carrying an HTTP-like `status`
+/// so the frontend can keep its 409 (stale) / 422 (invalid) / 404 handling.
+#[derive(Serialize)]
+pub struct ApplyErr {
+    pub status: u16,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problems: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_rev: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<Project>,
+}
+
+#[tauri::command]
+pub fn apply_ops(
+    state: State<'_, AppState>,
+    id: String,
+    ops: Vec<Value>,
+    dry_run: bool,
+    base_rev: Option<u64>,
+) -> Result<OpsResult, ApplyErr> {
+    state
+        .store
+        .lock()
+        .unwrap()
+        .apply_ops(&id, &ops, dry_run, base_rev)
+        .map_err(|e| match e {
+            OpsError::NotFound => ApplyErr {
+                status: 404,
+                message: format!("project {id} not found"),
+                problems: None,
+                current_rev: None,
+                project: None,
+            },
+            OpsError::Stale {
+                current_rev,
+                project,
+            } => ApplyErr {
+                status: 409,
+                message: "project was modified (stale revision)".into(),
+                problems: None,
+                current_rev: Some(current_rev),
+                project: Some(project),
+            },
+            OpsError::Invalid { problems } => ApplyErr {
+                status: 422,
+                message: "invalid edit ops".into(),
+                problems: Some(problems),
+                current_rev: None,
+                project: None,
+            },
+        })
 }
 
 /// Smoke command retained from P0: parse a YAML agent config and return its

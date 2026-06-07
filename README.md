@@ -32,12 +32,16 @@ the same rev as `openpiscis` / `AgentZ` (see the workspace `Cargo.toml`).
 
 ## Status
 
-**P0 — desktop skeleton (done):** Cargo workspace, Tauri v2 shell that launches
-a window and loads the ported HarnessLab frontend, `harnesslab-core` crate
-linking `piscis-kernel`, all Python removed. The IPC surface currently ships a
-minimal `app_info` + `parse_agent_config` smoke command; subsequent phases
-(P1–P6) migrate projects/ops, registry, run console, factory codegen, the AI
-copilot and the market. See the roadmap in `docs/desktop-rewrite-plan.md`.
+**P0–P2 — done.** Cargo workspace + Tauri v2 shell loading the ported HarnessLab
+frontend, `harnesslab-core` linking `piscis-kernel`, all Python removed (P0); the
+`Project`/`AgentSpec`/`Topology` serde models, the component/tool registry and a
+read-only canvas wired over IPC (P1); and a transactional **Edit-Ops engine**
+(`ops.rs`: validate/diff/apply, all-or-nothing) backed by a bundled-SQLite store
+(`rusqlite`) that persists projects + canvas layout, with an `apply_ops` command
+doing `base_rev` optimistic-concurrency and 422/409/404 error payloads — the
+canvas is now bidirectionally editable (P2). Subsequent phases (P3–P6) add the run
+console, factory codegen, the AI copilot and the market. See the roadmap in
+`docs/desktop-rewrite-plan.md`.
 
 ## Develop
 

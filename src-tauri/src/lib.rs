@@ -6,6 +6,9 @@
 
 mod commands;
 
+use harnesslab_core::store::Store;
+use tauri::Manager;
+
 /// Build and run the Tauri application.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,7 +16,22 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(commands::AppState::default())
+        .setup(|app| {
+            // Persist projects/layout in the per-user app data dir. Fall back to
+            // an in-memory store if the directory or DB cannot be opened.
+            let store = app
+                .path()
+                .app_data_dir()
+                .ok()
+                .and_then(|dir| {
+                    std::fs::create_dir_all(&dir).ok()?;
+                    Store::open(dir.join("harnesslab.db")).ok()
+                })
+                .unwrap_or_else(Store::in_memory);
+            let _ = store.seed_if_empty();
+            app.manage(commands::AppState::new(store));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_info,
             commands::parse_agent_config,
@@ -27,6 +45,7 @@ pub fn run() {
             commands::delete_project,
             commands::get_layout,
             commands::save_layout,
+            commands::apply_ops,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HarnessLab Desktop");

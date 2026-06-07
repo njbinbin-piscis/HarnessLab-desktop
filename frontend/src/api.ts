@@ -229,8 +229,24 @@ export const api = {
   saveLayout: (id: string, layout: Layout) => invoke<Layout>("save_layout", { id, layout }),
 
   // ── Edit Ops (P2) ─────────────────────────────────────────────────────────
-  applyOps: (_id: string, _ops: EditOp[], _dry = false, _baseRev?: number, _clientId?: string) =>
-    comingSoon<OpsResult>("P2", "结构化编辑（Edit Ops）"),
+  applyOps: async (
+    id: string,
+    ops: EditOp[],
+    dry_run = false,
+    base_rev?: number,
+    _clientId?: string,
+  ): Promise<OpsResult> => {
+    try {
+      // Tauri converts camelCase JS args → snake_case Rust params.
+      return await invoke<OpsResult>("apply_ops", { id, ops, dryRun: dry_run, baseRev: base_rev });
+    } catch (e) {
+      const err = e as { status?: number; message?: string; problems?: string[]; project?: Project };
+      const status = typeof err?.status === "number" ? err.status : 500;
+      if (status === 409) throw new ApiError(409, { reason: "stale", project: err.project });
+      const detail = err?.problems ?? err?.message ?? err;
+      throw new ApiError(status, detail);
+    }
+  },
 
   // ── Run console / observability (P3) ──────────────────────────────────────
   listCanvasRuns: (_id: string, _limit = 25) => Promise.resolve({ runs: [] as CanvasRun[] }),
