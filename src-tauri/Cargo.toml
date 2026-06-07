@@ -1,6 +1,6 @@
 [package]
 name = "harnesslab-desktop"
-version = "0.2.0"
+version = "0.2.1"
 description = "HarnessLab Desktop — a Tauri v2 desktop app to design, run and ship multi-agent harnesses."
 authors = ["HarnessLab"]
 license = "MIT"

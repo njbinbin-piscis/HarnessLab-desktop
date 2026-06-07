@@ -1,6 +1,6 @@
 [package]
 name = "harness-rt"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Native agent runtime for HarnessLab Desktop — LLM clients, agent loop, neutral tools, memory, compaction, context and policy. Replaces the former external piscis-kernel dependency."
 

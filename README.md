@@ -3,81 +3,110 @@
 **A desktop app to visually design, run and ship pluggable agent harnesses and
 multi-agent systems — Rust + Tauri, no Python.**
 
-This repository (formerly `agent-workbench`) is being rewritten into a desktop
-edition of [HarnessLab](../HarnessLab). The web platform's Python engine is
-replaced by the Rust [`piscis-kernel`](https://github.com/njbinbin-piscis/piscis-engine)
-runtime, the rest of the backend logic moves into a Rust core crate, and the
-React visual-designer frontend is reused — talking to the core over **Tauri
-IPC (commands/events)** instead of an HTTP REST/SSE API.
+This repository is the desktop edition of [HarnessLab](../HarnessLab). The web
+platform's Python engine is replaced by an **in-tree native Rust runtime**
+([`harness-rt`](crates/harness-rt)), the design-time logic lives in
+[`harnesslab-core`](crates/harnesslab-core), and the React visual-designer
+frontend talks to the core over **Tauri IPC (commands/events)** instead of HTTP
+REST/SSE.
 
-See [`docs/desktop-rewrite-plan.md`](docs/desktop-rewrite-plan.md) for the full
-migration plan, module mapping and phased roadmap.
+See [`docs/desktop-rewrite-plan.md`](docs/desktop-rewrite-plan.md) for the
+migration history and phased roadmap.
 
 ## Architecture
 
 ```
-frontend/                 # React + TS + Vite UI (ported from HarnessLab; @xyflow/react canvas)
-  src/tauri.ts            #   Tauri IPC client (replaces the HTTP REST/SSE data layer)
+frontend/                 # React + TS + Vite UI (@xyflow/react canvas)
+  src/api.ts              #   Tauri IPC client (replaces HTTP REST/SSE)
 src-tauri/                # Tauri v2 desktop shell
-  src/commands.rs         #   #[tauri::command] surface (replaces FastAPI routes)
-  src/lib.rs / main.rs    #   app builder + entry point
+  src/commands.rs         #   #[tauri::command] surface
 crates/
-  harnesslab-core/        # Rust core: config/loader (config→HarnessConfig), and — over the
-                          #   roadmap — project/ops, registry, experiment, factory, design, market.
-                          #   Ships a headless CLI bin (`harnesslab-headless`).
+  harness-rt/             # Native agent runtime (no external piscis-engine dep)
+    llm/                  #   OpenAI-compatible + Claude clients (reqwest)
+    agent/                  #   AgentLoop, 8 loop strategies, compaction, hooks
+    tools/                  #   file/shell/web_search/url_fetcher + register_algorithm
+    memory/                 #   in-memory vector + SQLite backends
+    scoring/                #   8 native eval scorers
+  harnesslab-core/        # Project model, ops, registry, runner, eval, market,
+                          #   skill/algorithm persistence + headless CLI
 ```
 
-The agent runtime (`piscis-kernel`) is consumed as a git dependency, pinned to
-the same rev as `openpiscis` / `AgentZ` (see the workspace `Cargo.toml`).
+Data flows: **UI → Tauri commands → harnesslab-core → harness-rt → LLM API**.
 
-## Status
+There is **no** `piscis-kernel` git dependency; the runtime is fully owned in
+this workspace.
 
-**P0–P6 — done.** Cargo workspace + Tauri v2 shell loading the ported HarnessLab
-frontend through P5 (models, Edit-Ops, SQLite, run console with multi-agent
-coordination, Factory codegen, Design Copilot). **P6** adds the decentralized
-**Market** (local package install with integrity + HMAC/ed25519 signatures,
-palette merge), **Registry protocol v1** ([`docs/market-registry-protocol.md`](docs/market-registry-protocol.md) —
-HTTPS tarball / git / `registry:` catalog for future cloud markets), **project templates**, canvas **auto-layout** and **undo/redo**,
-and Factory **.zip download** via the native save dialog. See
-`docs/desktop-rewrite-plan.md`.
+## Features (v0.2)
+
+| Area | What ships |
+|------|------------|
+| **Runtime** | Native `harness-rt`: real loop/compaction/memory/context algorithms, no silent fallbacks |
+| **Libraries** | Agent, Algorithm, Tool (platform-tagged), Skill (ClawHub search/install) |
+| **Projects** | Visual canvas, Edit-Ops, SQLite persistence, multi-agent coordinators |
+| **Run console** | Live streaming runs, session tree, per-agent metrics |
+| **Evaluation** | Built-in datasets, 8 scorers, experiment dashboard + leaderboard |
+| **Meta-agent** | System **Architect** agent with `register_algorithm` hot-register |
+| **Factory** | Python / TypeScript / Rust codegen + zip export |
+| **Market** | Local package install (signed tarballs, registry protocol v1) |
+| **i18n** | English + 中文 UI |
+
+## Install
+
+Pre-built bundles are attached to [GitHub Releases](https://github.com/njbinbin-piscis/agent-workbench/releases):
+
+| Platform | Artifacts |
+|----------|-----------|
+| Linux x86_64 | `.deb`, `.AppImage` |
+| Linux ARM64 | `.deb`, `.AppImage` |
+| Windows x86_64 / ARM64 | `.msi`, `.exe` (NSIS) |
+| macOS (Apple Silicon) | `.dmg`, `.app` |
+| macOS Universal | `.dmg` (Intel + Apple Silicon) |
 
 ## Develop
 
-Prerequisites: a Rust toolchain, Node.js, and the Tauri Linux system deps
+Prerequisites: Rust stable, Node.js 20+, and Tauri system deps on Linux
 (`libwebkit2gtk-4.1`, `libgtk-3`, etc.).
 
 ```bash
-# install JS deps (root Tauri CLI + frontend)
+# JS deps (root Tauri CLI + frontend)
 npm install
 npm install --prefix frontend
 
-# run the desktop app in dev (spawns Vite on :1420, then the Tauri window)
+# dev: Vite on :1420 + Tauri window
 npm run tauri:dev
 
-# build a release bundle
+# release bundle (local)
 npm run tauri:build
 ```
 
 Pure-Rust workflows (no GUI):
 
 ```bash
-cargo build --workspace
-cargo test -p harnesslab-core
-
-# headless CLI over the config-driven harness builder
-cargo run -p harnesslab-core --bin harnesslab-headless -- --help
+cargo fmt --check
+cargo test
+cargo build -p harnesslab-core --bin harnesslab-headless --release
+cargo build -p harnesslab-desktop --release
 ```
 
-### Local engine hacking
+### LLM credentials
 
-To hack `piscis-kernel` locally, uncomment the `[patch]` block at the bottom of
-the workspace `Cargo.toml` and point it at a sibling `../piscis-engine` checkout.
+Agent runs resolve provider credentials from the environment (same convention as
+the Piscis ecosystem):
+
+```bash
+export PISCIS_PROVIDER=openai   # or anthropic, deepseek, qwen, …
+export PISCIS_API_KEY=sk-…
+export PISCIS_BASE_URL=https://…   # optional, for compatible endpoints
+```
+
+Configure per-agent overrides in the project designer (credentials slot:
+`env` or `static`).
 
 ## Configuration reference
 
-The YAML agent-config format (consumed by `harnesslab-core`'s loader and the
-headless CLI) is documented inline in `crates/harnesslab-core/src/config.rs`,
-with examples under `configs/`.
+YAML agent configs consumed by `harnesslab-core` and the headless CLI are
+documented in `crates/harnesslab-core/src/config.rs`; examples live under
+`configs/`.
 
 ## License
 
