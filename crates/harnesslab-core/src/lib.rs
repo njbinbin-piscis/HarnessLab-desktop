@@ -15,6 +15,7 @@ pub mod config;
 pub mod context_managers;
 pub mod contrib;
 pub mod hooks;
+pub mod factory;
 pub mod loader;
 pub mod ops;
 pub mod plugins;

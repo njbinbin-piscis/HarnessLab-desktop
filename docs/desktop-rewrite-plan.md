@@ -146,7 +146,7 @@ agent-workbench/                # 重写后即 HarnessLab Desktop
 | **P1 模型 + 注册表 + 只读画布** ✅ | `Project/AgentSpec/Topology`(serde) + 统一 registry catalog；command 供数据，画布只读渲染 + 点选 Inspector | 任意 project 正确可视化；catalog 列出 kernel + 自带算法 |
 | **P2 Edit Ops + 双向编辑** ✅ | 事务性 ops 引擎（`ops.rs` 校验/diff/apply，全集 op）+ `rusqlite`(bundled) 存储 + Layout 落库；`apply_ops` 命令带 base_rev 乐观并发、422/409/404 错误负载 | ops/store 单测（合法/非法引用/dry-run/stale rev）；编辑→存→重载一致 |
 | **P3 运行台 + 监控** ✅ | 经 kernel 跑 agent（`runner.rs`：Project→AgentConfig 映射 + AgentEvent→`{kind,agent,text,data,ts}` 翻译）；`run_project` 经 Tauri **Channel** 流式回放；节点 live phase 点亮 + 指标叠加；运行落 `canvas_runs` + Session 树。**单 agent 已通；多 agent 协调留作后续** | 画布跑任务、事件实时点亮、指标回填、历史可回看；无密钥优雅报错 |
-| **P4 Factory 代码生成** ⬜ | IR + py/ts/rust 发射器；实时代码预览 | 生成 Rust 可编译、TS 可类型检查 |
+| **P4 Factory 代码生成** ✅ | 语言中立 IR + python/typescript/rust 发射器（`factory.rs`：自包含 scaffold、离线 mock LLM、coordinator body 逐字移植 + sequential 兜底）；`generate`/`languages` 命令；FactoryPanel 实时多文件预览 | 生成物已落盘逐一验证：Rust `rustc` 全 coordinator 零告警编译并运行、Python `py_compile`+运行、TS `tsc --noEmit` 零错（含 `@types/node`）；3 项 factory 单测 |
 | **P5 Design Copilot** ⬜ | NL→校验 Edit Ops→diff→apply（规则 + 可选 LLM 规划器） | 指令产出合法 ops；diff 可审阅；非法 ops 被拒 |
 | **P6 Market + 打磨** ⬜ | 包安装/打包/签名（ed25519 / HMAC）；自动布局 / 撤销重做 / 模板库 / 键盘流 | 安装本地包、签名校验通过；模板一键起手；undo/redo 正确 |
 

@@ -305,9 +305,13 @@ export const api = {
   leaderboard: (_datasetId?: string, _limit = 20) => Promise.resolve([] as any[]),
 
   // ── Factory codegen (P4) ──────────────────────────────────────────────────
-  languages: () => Promise.resolve({ languages: ["python", "typescript", "rust"] }),
-  generate: (_projectId: string, _language: string, _options: Record<string, unknown> = {}) =>
-    comingSoon<{ language: string; files: Record<string, string> }>("P4", "代码生成"),
+  languages: () => invoke<{ languages: string[] }>("languages"),
+  generate: (projectId: string, language: string, options: Record<string, unknown> = {}) =>
+    invoke<{ language: string; files: Record<string, string> }>("generate", {
+      id: projectId,
+      language,
+      options,
+    }),
 
   // ── Embeddings / market (later) ───────────────────────────────────────────
   embeddingStatus: (_probe = false) =>

@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use harnesslab_core::factory::{self, GenerateOutput};
 use harnesslab_core::project::{new_id, now_secs, Project};
 use harnesslab_core::registry::{self, ComponentReference, ComponentSpec, ToolSpec};
 use harnesslab_core::runner::{self, LlmCreds, NodeMetrics, UiEvent};
@@ -315,6 +316,35 @@ pub fn session_tree(state: State<'_, AppState>, id: String, limit: Option<u32>) 
         .lock()
         .unwrap()
         .session_tree(&id, limit.unwrap_or(200))
+}
+
+// ── Factory codegen (P4) ─────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct LanguagesResponse {
+    pub languages: Vec<String>,
+}
+
+#[tauri::command]
+pub fn languages() -> LanguagesResponse {
+    LanguagesResponse {
+        languages: factory::languages(),
+    }
+}
+
+#[tauri::command]
+pub fn generate(
+    state: State<'_, AppState>,
+    id: String,
+    language: String,
+    options: Option<Value>,
+) -> Result<GenerateOutput, String> {
+    let project = {
+        let store = state.store.lock().unwrap();
+        store.get_project(&id)
+    }
+    .ok_or_else(|| format!("project {id} not found"))?;
+    factory::generate(&project, &language, &options.unwrap_or(Value::Null))
 }
 
 /// Smoke command retained from P0: parse a YAML agent config and return its

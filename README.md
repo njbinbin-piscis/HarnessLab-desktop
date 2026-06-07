@@ -32,21 +32,27 @@ the same rev as `openpiscis` / `AgentZ` (see the workspace `Cargo.toml`).
 
 ## Status
 
-**P0–P2 — done.** Cargo workspace + Tauri v2 shell loading the ported HarnessLab
+**P0–P4 — done.** Cargo workspace + Tauri v2 shell loading the ported HarnessLab
 frontend, `harnesslab-core` linking `piscis-kernel`, all Python removed (P0); the
 `Project`/`AgentSpec`/`Topology` serde models, the component/tool registry and a
 read-only canvas wired over IPC (P1); and a transactional **Edit-Ops engine**
 (`ops.rs`: validate/diff/apply, all-or-nothing) backed by a bundled-SQLite store
 (`rusqlite`) that persists projects + canvas layout, with an `apply_ops` command
 doing `base_rev` optimistic-concurrency and 422/409/404 error payloads — the
-canvas is now bidirectionally editable (P2); and a live **run console** (P3) that
+canvas is now bidirectionally editable (P2); a live **run console** (P3) that
 executes the project's primary agent over `piscis-kernel`, maps the visual
 `AgentSpec` to a harness config, streams translated engine events to the canvas
 over a Tauri **IPC channel** (lighting up nodes + overlaying per-agent metrics),
-and persists each run to a `canvas_runs` history + session tree. Credentials come
-from the environment (`PISCIS_API_KEY` / `PISCIS_PROVIDER` / `PISCIS_BASE_URL`);
-multi-agent coordination is the remaining P3 sub-item. Subsequent phases (P4–P6)
-add factory codegen, the AI copilot and the market. See the roadmap in
+and persists each run to a `canvas_runs` history + session tree (credentials from
+`PISCIS_API_KEY` / `PISCIS_PROVIDER` / `PISCIS_BASE_URL`; multi-agent coordination
+is the remaining P3 sub-item); and a **Factory codegen** path (P4) — `factory.rs`
+builds a language-neutral IR from a project and emits a self-contained,
+offline-runnable multi-agent codebase in **Python / TypeScript / Rust** (per-target
+LLM client + verbatim-ported coordinator bodies with a sequential fallback), served
+by `generate`/`languages` commands and previewed file-by-file in the Factory panel.
+The generated output is verified to `rustc`-compile (warning-clean across every
+coordinator), `py_compile` + run, and `tsc --noEmit`-typecheck. Subsequent phases
+(P5–P6) add the AI design copilot and the market. See the roadmap in
 `docs/desktop-rewrite-plan.md`.
 
 ## Develop
