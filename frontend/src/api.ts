@@ -5,7 +5,7 @@
 // or reject with a clear "coming in P<n>" message.
 
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { t } from "./i18n/index";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 /** True when running inside the Tauri webview (vs. a plain browser). */
 export function isDesktop(): boolean {
@@ -83,7 +83,11 @@ export interface DeclarativeAlgorithm {
   addendum: string;
   reflective?: boolean;
   max_iterations?: number | null;
+  params?: unknown;
 }
+
+/** Declarative algorithm kinds the runtime can dispatch end-to-end. */
+export const RUNTIME_ALGO_KINDS = ["loop", "compaction", "context", "scorer"] as const;
 
 export interface EvalRunSummary {
   id: string;
@@ -155,6 +159,32 @@ export type LibraryRunMsg =
   | { type: "result"; result: string; total_tokens: number }
   | { type: "error"; message: string };
 
+export type AlgorithmTrialMsg =
+  | { type: "event"; event: { kind: string; agent: string; text: string; data?: unknown; ts: number } }
+  | { type: "result"; result: string; total_tokens: number; success: boolean }
+  | { type: "error"; message: string };
+
+export interface AutoloopRound {
+  round: number;
+  accuracy: number;
+  baseline: boolean;
+  instruction: string;
+  ops: unknown[];
+  kept: boolean;
+  note: string;
+}
+
+export type AutoloopMsg =
+  | { type: "round"; round: AutoloopRound }
+  | {
+      type: "result";
+      best_round: number;
+      best_accuracy: number;
+      saved_project_id?: string | null;
+      saved_project_name?: string | null;
+    }
+  | { type: "error"; message: string };
+
 export type EditOp = Record<string, unknown>;
 
 export interface OpsResult {
@@ -188,20 +218,6 @@ export interface SessionNode {
   assistant?: string;
   created_at?: number;
   total_tokens?: number;
-}
-
-export interface CollabState {
-  version: number;
-  presence: { client_id: string; name: string; color: string }[];
-  locks: Record<string, { client_id: string; name: string }>;
-  lease: { client_id: string; name: string } | null;
-  handoff?: { client_id: string; name: string } | null;
-}
-
-export interface LockResult {
-  ok: boolean;
-  holder?: string;
-  state: CollabState;
 }
 
 export class ApiError extends Error {
@@ -292,26 +308,13 @@ export interface Topology {
   agent_order: string[];
 }
 
-// Reject helper for endpoints not yet wired in the current phase.
-function comingSoon<T>(phase: string, feature: string): Promise<T> {
-  return Promise.reject(new ApiError(501, t("errors.comingSoon", { feature, phase })));
-}
-
-const EMPTY_COLLAB: CollabState = {
-  version: 0,
-  presence: [],
-  locks: {},
-  lease: null,
-  handoff: null,
-};
-
 export const api = {
   // ── Registry / catalog (P1) ───────────────────────────────────────────────
   catalog: () => invoke<Record<string, ComponentSpec[]>>("registry_catalog"),
   tools: () => invoke<{ tools: ToolSpec[] }>("registry_tools"),
   componentReference: (kind: string, name: string) =>
     invoke<ComponentReference>("component_reference", { kind, name }),
-  reloadLibrary: () => Promise.resolve({}),
+  reloadLibrary: () => invoke<Record<string, ComponentSpec[]>>("reload_library"),
 
   // ── Projects (P1) ─────────────────────────────────────────────────────────
   listProjects: () => invoke<{ id: string; name: string }[]>("list_projects"),
@@ -360,31 +363,24 @@ export const api = {
     // Tauri converts camelCase JS args → snake_case Rust params.
     return invoke<void>("run_project", { id, task, onEvent: channel });
   },
-  runtimeRuns: (_projectId?: string, _activeOnly = false) =>
-    Promise.resolve({ runs: [] as RuntimeRun[] }),
-  runtimeStreamUrl: (_projectId?: string) => "",
-
-  // ── Collaboration (dropped for the single-user desktop) ───────────────────
-  collabJoin: (_id: string, _clientId: string, _name: string) => Promise.resolve(EMPTY_COLLAB),
-  collabHeartbeat: (_id: string, _clientId: string) => Promise.resolve(EMPTY_COLLAB),
-  collabLeave: (_id: string, _clientId: string) => Promise.resolve(EMPTY_COLLAB),
-  collabLock: (_id: string, _clientId: string, _target: string) =>
-    Promise.resolve({ ok: true, state: EMPTY_COLLAB } as LockResult),
-  collabUnlock: (_id: string, _clientId: string, _target: string) => Promise.resolve(EMPTY_COLLAB),
-  leaseAcquire: (_id: string, _clientId: string, _name: string) =>
-    Promise.resolve({ ok: true, state: EMPTY_COLLAB } as LockResult),
-  leaseRelease: (_id: string, _clientId: string) => Promise.resolve(EMPTY_COLLAB),
-  leaseRequest: (_id: string, _clientId: string, _name: string) =>
-    Promise.resolve({ ok: true, state: EMPTY_COLLAB } as LockResult),
-  collabStreamUrl: (_id: string, _clientId: string, _name: string) => "",
-  collabWsUrl: (_id: string, _clientId: string, _name: string) => "",
+  runtimeRuns: () => invoke<RuntimeSnapshot>("runtime_runs"),
+  onRuntimeUpdate: (cb: (snap: RuntimeSnapshot) => void): Promise<UnlistenFn> =>
+    listen<RuntimeSnapshot>("runtime_update", (e) => cb(e.payload)),
 
   // ── Design / Copilot (P5) ─────────────────────────────────────────────────
   designEdit: (projectId: string, instruction: string) =>
     invoke<EditProposal>("design_edit", { id: projectId, instruction }),
-  design: (_request: string) => comingSoon<{ source: string; project: Project }>("P5", t("nav.design")),
-  authorComponent: (_kind: string, _name: string, _description: string) =>
-    comingSoon("P5", t("errors.componentAuthor")),
+  design: (brief: string) =>
+    invoke<{ source: string; explanation: string; project: Project }>("design_project", { brief }),
+  runAlgorithmTrialChannel: (
+    algorithm: DeclarativeAlgorithm,
+    task: string,
+    onMsg: (msg: AlgorithmTrialMsg) => void,
+  ) => {
+    const channel = new Channel<AlgorithmTrialMsg>();
+    channel.onmessage = onMsg;
+    return invoke<void>("run_algorithm_trial", { algorithm, task, onEvent: channel });
+  },
 
   // ── Datasets / experiments ────────────────────────────────────────────────
   listDatasets: () =>
@@ -393,6 +389,16 @@ export const api = {
     ).then((r) => r.datasets),
   evalRun: (projectId: string, datasetId: string) =>
     invoke<EvalRunSummary>("run_eval", { projectId, datasetId }),
+  runAutoloopChannel: (
+    projectId: string,
+    datasetId: string,
+    rounds: number,
+    onMsg: (msg: AutoloopMsg) => void,
+  ) => {
+    const channel = new Channel<AutoloopMsg>();
+    channel.onmessage = onMsg;
+    return invoke<void>("run_autoloop", { projectId, datasetId, rounds, onEvent: channel });
+  },
   listRuns: (projectId?: string) =>
     invoke<{ runs: EvalRunSummary[] }>("list_eval_runs", { projectId: projectId ?? null }).then(
       (r) => r.runs,
@@ -426,14 +432,14 @@ export const api = {
     invoke<Project>("create_from_template", { templateId, name: name ?? null }),
 
   // ── Embeddings / market (P6) ──────────────────────────────────────────────
-  embeddingStatus: (_probe = false) =>
-    Promise.resolve<{
+  embeddingStatus: (probe = false) =>
+    invoke<{
       backends: string[];
       api_configured: boolean;
       base_url: string;
       model: string;
       probe?: { ok: boolean; dim?: number; note?: string; reason?: string };
-    }>({ backends: ["bow", "hashing"], api_configured: false, base_url: "", model: "" }),
+    }>("embedding_status", { probe }),
   marketInstalled: () => invoke<{ packages: { name: string; version: string; type: string; category: string; source: string; installed_at: number }[] }>("market_installed").then((r) => r.packages),
   marketSampleSource: () => invoke<string>("market_sample_source"),
   marketInspect: (source: string) =>
@@ -448,7 +454,7 @@ export const api = {
     invoke<{ registries: string[] }>("market_get_registries").then((r) => r.registries),
   marketSetRegistries: (registries: string[]) =>
     invoke<void>("market_set_registries", { registries }),
-  marketCatalog: () =>
+  marketCatalog: (query?: string) =>
     invoke<{
       entries: {
         registry: string;
@@ -461,7 +467,7 @@ export const api = {
         keywords: string[];
         versions: string[];
       }[];
-    }>("market_catalog").then((r) => r.entries),
+    }>("market_catalog", { query: query ?? null }).then((r) => r.entries),
 
   // ── Agent library ─────────────────────────────────────────────────────────
   listLibraryAgents: () =>
@@ -495,6 +501,11 @@ export const api = {
   // ── Declarative algorithm registry (meta-agent) ───────────────────────────
   registerAlgorithm: (algorithm: DeclarativeAlgorithm) =>
     invoke<DeclarativeAlgorithm>("register_algorithm", { algorithm }),
+  authorAlgorithm: (instruction: string, current?: DeclarativeAlgorithm | null, kind?: string) =>
+    invoke<{ algorithm: DeclarativeAlgorithm; explanation: string; source: string }>(
+      "author_algorithm",
+      { instruction, current: current ?? null, kind: kind ?? null },
+    ),
   listAlgorithms: () =>
     invoke<{ algorithms: DeclarativeAlgorithm[] }>("list_algorithms").then((r) => r.algorithms),
   deleteAlgorithm: (name: string) => invoke<boolean>("delete_algorithm", { name }),

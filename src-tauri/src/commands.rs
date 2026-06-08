@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use harnesslab_core::agent_library::{LibraryAgent, LibraryAgentSummary};
+use harnesslab_core::autoloop;
 use harnesslab_core::copilot;
 use harnesslab_core::eval;
 use harnesslab_core::factory::{self, GenerateOutput};
@@ -100,6 +101,19 @@ pub fn registry_catalog(state: State<'_, AppState>) -> BTreeMap<String, Vec<Comp
     catalog
 }
 
+/// Hot-reload the component library: re-run the contrib factory registration and
+/// re-register every persisted declarative algorithm, then return the freshly
+/// merged catalog so the palette/browser can refresh without an app restart.
+#[tauri::command]
+pub fn reload_library(state: State<'_, AppState>) -> BTreeMap<String, Vec<ComponentSpec>> {
+    harnesslab_core::contrib::register_all();
+    {
+        let store = state.store.lock().unwrap();
+        algorithms::register_persisted(&store);
+    }
+    registry_catalog(state)
+}
+
 #[derive(Serialize)]
 pub struct ToolsList {
     pub tools: Vec<ToolSpec>,
@@ -187,7 +201,7 @@ pub struct ApplyErr {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_rev: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<Project>,
+    pub project: Option<Box<Project>>,
 }
 
 #[tauri::command]
@@ -221,7 +235,7 @@ pub fn apply_ops(
                 problems: None,
                 current_rev: Some(current_rev),
                 project: Some(project),
-            },
+            }, // `project` is already boxed by OpsError::Stale
             OpsError::Invalid { problems } => ApplyErr {
                 status: 422,
                 message: "invalid edit ops".into(),
@@ -277,6 +291,7 @@ pub async fn run_project(
     let run_id = new_id();
     let started = now_secs();
     let cancel = Arc::new(AtomicBool::new(false));
+    crate::runtime::start(&app, &run_id, &id, &task);
 
     let (tx, mut rx) = mpsc::channel::<UiEvent>(256);
     let proj = project.clone();
@@ -289,6 +304,7 @@ pub async fn run_project(
 
     let mut collected: Vec<UiEvent> = Vec::new();
     while let Some(ev) = rx.recv().await {
+        crate::runtime::ingest(&app, &run_id, &ev);
         collected.push(ev.clone());
         let _ = on_event.send(RunMsg::Event { event: ev });
     }
@@ -302,6 +318,7 @@ pub async fn run_project(
 
     match outcome {
         Ok(out) => {
+            crate::runtime::finish(&app, &run_id, Some(out.result.clone()), None);
             let metrics: BTreeMap<String, NodeMetrics> = runner::metrics_from_events(&collected)
                 .into_iter()
                 .collect();
@@ -328,6 +345,7 @@ pub async fn run_project(
             Ok(())
         }
         Err(e) => {
+            crate::runtime::finish(&app, &run_id, None, Some(e.clone()));
             let _ = on_event.send(RunMsg::Error { message: e });
             Ok(())
         }
@@ -507,10 +525,39 @@ pub struct CatalogResponse {
 }
 
 #[tauri::command]
-pub fn market_catalog(state: State<'_, AppState>) -> Result<CatalogResponse, String> {
-    Ok(CatalogResponse {
-        entries: state.market.lock().unwrap().catalog()?,
-    })
+pub fn market_catalog(
+    state: State<'_, AppState>,
+    query: Option<String>,
+) -> Result<CatalogResponse, String> {
+    let mut entries = state.market.lock().unwrap().catalog()?;
+    if let Some(q) = query.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+        // Rank packages by semantic similarity of name+description+keywords.
+        let texts: Vec<String> = entries
+            .iter()
+            .map(|e| {
+                format!(
+                    "{} {} {}",
+                    e.name,
+                    e.description.clone().unwrap_or_default(),
+                    e.keywords.join(" ")
+                )
+            })
+            .collect();
+        let order = harnesslab_core::embeddings::rank_by_query(q, texts.iter().map(String::as_str));
+        entries = order.into_iter().map(|i| entries[i].clone()).collect();
+    }
+    Ok(CatalogResponse { entries })
+}
+
+/// Report available embedding backends; with `probe`, exercise the best one.
+#[tauri::command]
+pub async fn embedding_status(
+    probe: Option<bool>,
+) -> Result<harnesslab_core::embeddings::EmbeddingStatus, String> {
+    let probe = probe.unwrap_or(false);
+    tokio::task::spawn_blocking(move || harnesslab_core::embeddings::status(probe))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── Templates (P6) ───────────────────────────────────────────────────────────
@@ -592,6 +639,59 @@ pub async fn design_edit(
     })
 }
 
+#[derive(Serialize)]
+pub struct DesignResult {
+    pub source: String,
+    pub explanation: String,
+    pub project: Project,
+}
+
+/// Architect: turn a natural-language brief into an unsaved project scaffold.
+///
+/// Starts from a minimal single-agent project, asks the copilot (LLM with a
+/// deterministic rule fallback) to propose Edit Ops for the brief, applies them,
+/// and returns the resulting project. The project is **not** persisted; the
+/// frontend either saves it or opens it in the visual designer for edits.
+#[tauri::command]
+pub async fn design_project(
+    state: State<'_, AppState>,
+    brief: String,
+) -> Result<DesignResult, String> {
+    use harnesslab_core::project::{AgentSpec, Topology};
+
+    let base = Project {
+        id: String::new(),
+        name: "Designed project".to_string(),
+        description: brief.chars().take(200).collect(),
+        agents: vec![AgentSpec::new("agent1")],
+        topology: Topology {
+            mode: "single".to_string(),
+            coordinator: None,
+            agent_order: vec!["agent1".to_string()],
+        },
+        datasets: vec![],
+        scorer: None,
+        rev: 0,
+        created_at: now_secs(),
+        updated_at: now_secs(),
+    };
+
+    let proposal = copilot::propose_ops_llm(&base, &brief).await;
+    let extras = AppState::market_name_extras(&state);
+    let names = registry::names_by_kind_merged(&extras);
+    let tools = registry::tool_names();
+    let result = ops::apply_ops(&base, &proposal.ops, &names, &tools);
+    // Apply succeeded → use the mutated project; otherwise return the base so the
+    // user can still open and edit it manually.
+    let project = if result.ok() { result.project } else { base };
+
+    Ok(DesignResult {
+        source: proposal.source,
+        explanation: proposal.explanation,
+        project,
+    })
+}
+
 // ── Agent library ───────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -662,6 +762,8 @@ pub async fn run_library_agent(
     let workspace = runner::library_agent_workspace(&base, &id);
     let _ = std::fs::create_dir_all(&workspace);
 
+    let run_id = new_id();
+    crate::runtime::start(&app, &run_id, &format!("library:{id}"), &task);
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, mut rx) = mpsc::channel::<UiEvent>(256);
     let spec = lib.spec.clone();
@@ -677,6 +779,7 @@ pub async fn run_library_agent(
         tokio::spawn(async move { runner::run_agent_task(&ctx, &spec, &task_run, "").await });
 
     while let Some(ev) = rx.recv().await {
+        crate::runtime::ingest(&app, &run_id, &ev);
         let _ = on_event.send(LibraryRunMsg::Event { event: ev });
     }
 
@@ -685,6 +788,7 @@ pub async fn run_library_agent(
     persist_drained_algorithms(&state);
     match joined {
         Ok(out) => {
+            crate::runtime::finish(&app, &run_id, Some(out.result.clone()), None);
             let total = out.total_input_tokens + out.total_output_tokens;
             let _ = on_event.send(LibraryRunMsg::Result {
                 result: out.result,
@@ -692,6 +796,7 @@ pub async fn run_library_agent(
             });
         }
         Err(e) => {
+            crate::runtime::finish(&app, &run_id, None, Some(e.clone()));
             let _ = on_event.send(LibraryRunMsg::Error { message: e });
         }
     }
@@ -1077,7 +1182,21 @@ pub async fn run_eval(
     let ws_base = base.join("eval-workspaces").join(&project_id);
     let _ = std::fs::create_dir_all(&ws_base);
 
-    let run = eval::run_eval(&project, &dataset, &ws_base).await?;
+    let run_id = new_id();
+    crate::runtime::start(&app, &run_id, &project_id, &format!("eval:{dataset_id}"));
+    let run = match eval::run_eval(&project, &dataset, &ws_base).await {
+        Ok(r) => r,
+        Err(e) => {
+            crate::runtime::finish(&app, &run_id, None, Some(e.clone()));
+            return Err(e);
+        }
+    };
+    crate::runtime::finish(
+        &app,
+        &run_id,
+        Some(format!("accuracy {:.0}%", run.summary().accuracy * 100.0)),
+        None,
+    );
     {
         let store = state.store.lock().unwrap();
         store.put_eval_run(&run).map_err(|e| e.to_string())?;
@@ -1089,6 +1208,106 @@ pub async fn run_eval(
 #[tauri::command]
 pub fn get_eval_run(state: State<'_, AppState>, id: String) -> Option<eval::EvalRun> {
     state.store.lock().unwrap().get_eval_run(&id)
+}
+
+/// Streaming message envelope for the experiment autoloop.
+#[derive(Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AutoloopMsg {
+    Round {
+        round: autoloop::AutoloopRound,
+    },
+    Result {
+        best_round: usize,
+        best_accuracy: f64,
+        saved_project_id: Option<String>,
+        saved_project_name: Option<String>,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// Self-improvement autoloop: iteratively eval → propose change → re-eval,
+/// keeping the best variant. Streams each round, then persists the best variant
+/// as a new project when an improvement was found.
+#[tauri::command]
+pub async fn run_autoloop(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+    dataset_id: String,
+    rounds: u32,
+    on_event: Channel<AutoloopMsg>,
+) -> Result<(), String> {
+    let project = {
+        let store = state.store.lock().unwrap();
+        store.get_project(&project_id)
+    };
+    let Some(project) = project else {
+        let _ = on_event.send(AutoloopMsg::Error {
+            message: format!("project {project_id} not found"),
+        });
+        return Ok(());
+    };
+    let Some(dataset) = eval::dataset_by_id(&dataset_id) else {
+        let _ = on_event.send(AutoloopMsg::Error {
+            message: format!("dataset {dataset_id} not found"),
+        });
+        return Ok(());
+    };
+
+    let extras = AppState::market_name_extras(&state);
+    let names = registry::names_by_kind_merged(&extras);
+    let tools = registry::tool_names();
+
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let ws_base = base.join("autoloop-workspaces").join(&project_id);
+    let _ = std::fs::create_dir_all(&ws_base);
+
+    let rounds = rounds.clamp(1, 12) as usize;
+    let outcome = autoloop::run_autoloop(
+        &project,
+        &dataset,
+        rounds,
+        &ws_base,
+        &names,
+        &tools,
+        |round| {
+            let _ = on_event.send(AutoloopMsg::Round {
+                round: round.clone(),
+            });
+        },
+    )
+    .await;
+
+    let result = match outcome {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = on_event.send(AutoloopMsg::Error { message: e });
+            return Ok(());
+        }
+    };
+
+    // Persist the best variant as a new project when the loop improved on the
+    // baseline, so the user keeps both the original and the tuned variant.
+    let (saved_id, saved_name) = if result.best_round > 0 {
+        let mut variant = result.best_project.clone();
+        variant.name = format!("{} (autoloop)", variant.name);
+        let store = state.store.lock().unwrap();
+        let created = store.create_project(variant);
+        (Some(created.id.clone()), Some(created.name.clone()))
+    } else {
+        (None, None)
+    };
+
+    let _ = on_event.send(AutoloopMsg::Result {
+        best_round: result.best_round,
+        best_accuracy: result.best_accuracy,
+        saved_project_id: saved_id,
+        saved_project_name: saved_name,
+    });
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -1156,6 +1375,18 @@ pub fn register_algorithm(
     Ok(algorithm)
 }
 
+/// Algorithm Assistant: author or modify a declarative algorithm from a
+/// natural-language instruction (LLM with a deterministic rule fallback).
+/// Multi-turn editing passes the `current` algorithm back in each call.
+#[tauri::command]
+pub async fn author_algorithm(
+    instruction: String,
+    current: Option<DeclarativeAlgorithm>,
+    kind: Option<String>,
+) -> Result<copilot::AuthoredAlgorithm, String> {
+    Ok(copilot::author_algorithm_llm(&instruction, current.as_ref(), kind.as_deref()).await)
+}
+
 /// List persisted declarative algorithms.
 #[tauri::command]
 pub fn list_algorithms(state: State<'_, AppState>) -> AlgorithmsResponse {
@@ -1168,4 +1399,124 @@ pub fn list_algorithms(state: State<'_, AppState>) -> AlgorithmsResponse {
 #[tauri::command]
 pub fn delete_algorithm(state: State<'_, AppState>, name: String) -> bool {
     state.store.lock().unwrap().delete_algorithm(&name)
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AlgorithmTrialMsg {
+    Event {
+        event: UiEvent,
+    },
+    Result {
+        result: String,
+        total_tokens: u32,
+        success: bool,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// Dry-run a candidate algorithm before saving it.
+///
+/// Hot-registers the candidate **silently** (so a trial never lands in the
+/// persisted catalog), builds a default test agent with the candidate dropped
+/// into the slot matching its kind (the remaining slots keep engine defaults),
+/// then runs a task and streams events. A non-empty successful completion lets
+/// the UI enable the "Save & hot-reload" button.
+#[tauri::command]
+pub async fn run_algorithm_trial(
+    app: tauri::AppHandle,
+    _state: State<'_, AppState>,
+    algorithm: DeclarativeAlgorithm,
+    task: String,
+    on_event: Channel<AlgorithmTrialMsg>,
+) -> Result<(), String> {
+    use harnesslab_core::project::{AgentSpec, ComponentRef};
+
+    // Register the candidate live but silently — trial runs must not persist.
+    if let Err(e) = harness_rt::agent::declarative::register_silent(&algorithm) {
+        let _ = on_event.send(AlgorithmTrialMsg::Error { message: e });
+        return Ok(());
+    }
+
+    // Scorers aren't agent slots — exercise them directly on a built-in sample.
+    if algorithm.kind == "scorer" {
+        let pred = "The capital of France is Paris.";
+        let refr = "Paris";
+        let score = harness_rt::scoring::score(&algorithm.name, pred, refr, &algorithm.params);
+        let _ = on_event.send(AlgorithmTrialMsg::Result {
+            result: format!(
+                "scorer sample → score {score:.2}\n  prediction: {pred:?}\n  reference:  {refr:?}"
+            ),
+            total_tokens: 0,
+            success: score.is_finite(),
+        });
+        return Ok(());
+    }
+
+    let mut spec = AgentSpec::new("trial");
+    match algorithm.kind.as_str() {
+        // Drop the candidate into its matching slot; the other slots keep their
+        // defaults so the agent can actually run end-to-end.
+        "loop" => spec.r#loop = Some(ComponentRef::new(&algorithm.name)),
+        "compaction" => spec.compaction = Some(ComponentRef::new(&algorithm.name)),
+        "context" => spec.context = Some(ComponentRef::new(&algorithm.name)),
+        other => {
+            let _ = on_event.send(AlgorithmTrialMsg::Error {
+                message: format!(
+                    "trial run supports loop/compaction/context/scorer (got '{other}'); \
+                     coordinator/memory are advanced templates"
+                ),
+            });
+            return Ok(());
+        }
+    }
+
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let workspace = runner::library_agent_workspace(&base, "__algorithm_trial__");
+    let _ = std::fs::create_dir_all(&workspace);
+
+    let run_id = new_id();
+    crate::runtime::start(&app, &run_id, &format!("trial:{}", algorithm.name), &task);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (tx, mut rx) = mpsc::channel::<UiEvent>(256);
+    let task_run = task.clone();
+    let ctx = runner::AgentRunContext {
+        workspace,
+        events: tx,
+        cancel: cancel.clone(),
+    };
+    let handle =
+        tokio::spawn(async move { runner::run_agent_task(&ctx, &spec, &task_run, "").await });
+
+    while let Some(ev) = rx.recv().await {
+        crate::runtime::ingest(&app, &run_id, &ev);
+        let _ = on_event.send(AlgorithmTrialMsg::Event { event: ev });
+    }
+
+    let joined = handle.await.map_err(|e| format!("run join error: {e}"))?;
+    match joined {
+        Ok(out) => {
+            crate::runtime::finish(&app, &run_id, Some(out.result.clone()), None);
+            let total = out.total_input_tokens + out.total_output_tokens;
+            let success = !out.result.trim().is_empty();
+            let _ = on_event.send(AlgorithmTrialMsg::Result {
+                result: out.result,
+                total_tokens: total,
+                success,
+            });
+        }
+        Err(e) => {
+            crate::runtime::finish(&app, &run_id, None, Some(e.clone()));
+            let _ = on_event.send(AlgorithmTrialMsg::Error { message: e });
+        }
+    }
+    Ok(())
+}
+
+/// Snapshot of the in-process live-run registry (replaces the web SSE monitor).
+#[tauri::command]
+pub fn runtime_runs() -> crate::runtime::RuntimeSnapshot {
+    crate::runtime::snapshot()
 }

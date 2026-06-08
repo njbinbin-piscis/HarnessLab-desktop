@@ -92,22 +92,22 @@ fn test_workspace_root_manager_shallow_scan() {
     println!("✅ WorkspaceRootManager shallow scan validated");
 }
 
-/// Validates that DynamicContextManager handles empty/semantic search gracefully.
+/// Validates that DynamicContextManager handles an empty workspace gracefully.
 #[test]
-fn test_dynamic_context_manager_stub() {
+fn test_dynamic_context_manager_empty_workspace() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
 
     let manager = DynamicContextManager;
     let entries = manager.discover(root).unwrap();
 
-    // Stub implementation returns empty
+    // With no documentation files present, the scan yields no entries.
     assert_eq!(entries.len(), 0);
 
     let rendered = manager.render(&entries);
     assert!(rendered.contains("No relevant context found"));
 
-    println!("✅ DynamicContextManager stub behavior validated");
+    println!("✅ DynamicContextManager empty-workspace behavior validated");
 }
 
 /// EvolutionHook wrapper for testing private fields.

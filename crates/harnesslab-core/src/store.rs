@@ -108,7 +108,7 @@ pub enum OpsError {
     /// `base_rev` did not match the stored revision (a stale edit).
     Stale {
         current_rev: u64,
-        project: Project,
+        project: Box<Project>,
     },
     /// One or more ops failed validation (nothing applied).
     Invalid {
@@ -626,7 +626,7 @@ impl Store {
                 if base != project.rev {
                     return Err(OpsError::Stale {
                         current_rev: project.rev,
-                        project,
+                        project: Box::new(project),
                     });
                 }
             }

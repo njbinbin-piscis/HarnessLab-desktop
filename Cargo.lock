@@ -1426,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "harness-rt"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1442,7 +1442,7 @@ dependencies = [
 
 [[package]]
 name = "harnesslab-core"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "harnesslab-desktop"
-version = "0.2.0"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "chrono",

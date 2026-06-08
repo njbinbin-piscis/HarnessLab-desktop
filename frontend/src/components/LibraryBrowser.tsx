@@ -62,7 +62,7 @@ export function LibraryBrowser() {
             </span>
           ))}
         </div>
-        <button type="button" className="btn" style={{ width: "100%", marginBottom: 8 }} onClick={() => api.reloadLibrary().then(load)}>
+        <button type="button" className="btn" style={{ width: "100%", marginBottom: 8 }} onClick={() => api.reloadLibrary().then(setCatalog).catch((e) => setErr(String(e)))}>
           {t("library.hotReload")}
         </button>
         <EmbeddingStatus />

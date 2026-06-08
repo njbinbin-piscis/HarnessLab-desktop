@@ -24,9 +24,6 @@ export function AgentNode({ data, selected }: { data: { agent: AgentSpec }; sele
   const applyOps = useDesigner((s) => s.applyOps);
   const metrics = useDesigner((s) => s.metrics[agent.name]);
   const livePhase = useDesigner((s) => s.runtimeAgentPhase[agent.name]);
-  const lock = useDesigner((s) => s.locks[`agent:${agent.name}`]);
-  const clientId = useDesigner((s) => s.clientId);
-  const lockedByOther = lock && lock.client_id !== clientId;
 
   const onDropSlot = (slot: string) => (e: React.DragEvent) => {
     e.preventDefault();
@@ -47,11 +44,8 @@ export function AgentNode({ data, selected }: { data: { agent: AgentSpec }; sele
   const tools = agent.enabled_tools ?? null;
 
   return (
-    <div className={"agent-node" + (selected ? " selected" : "") + (lockedByOther ? " locked" : "")}>
+    <div className={"agent-node" + (selected ? " selected" : "")}>
       <Handle type="target" position={Position.Left} />
-      {lockedByOther ? (
-        <span className="an-lock" title={`${lock.name} is editing`}>🔒 {lock.name}</span>
-      ) : null}
       <div className="an-head">
         <span className="an-name">{agent.name}</span>
         {livePhase && livePhase !== "done" ? (

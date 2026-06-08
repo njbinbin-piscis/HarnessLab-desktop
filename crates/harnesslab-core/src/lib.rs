@@ -13,10 +13,12 @@
 
 pub mod agent_library;
 pub mod algorithms;
+pub mod autoloop;
 pub mod config;
 pub mod context_managers;
 pub mod contrib;
 pub mod copilot;
+pub mod embeddings;
 pub mod eval;
 pub mod factory;
 pub mod hooks;

@@ -25,8 +25,8 @@ const NAV: { groupKey: string; items: NavItem[] }[] = [
     groupKey: "nav.groups.build",
     items: [
       { id: "projects", labelKey: "nav.projects", blurbKey: "nav.projectsBlurb", icon: "projects" },
-      { id: "designer", labelKey: "nav.designer", blurbKey: "nav.designerBlurb", icon: "design" },
       { id: "design", labelKey: "nav.design", blurbKey: "nav.designBlurb", icon: "design" },
+      { id: "designer", labelKey: "nav.designer", blurbKey: "nav.designerBlurb", icon: "design" },
     ],
   },
   {
@@ -112,7 +112,14 @@ export function App() {
               <VisualDesigner activeProject={activeProject} setActiveProject={setActiveProject} />
             </ErrorBoundary>
           )}
-          {tab === "design" && <DesignStudio onSaved={(id) => { setActiveProject(id); setTab("experiments"); }} />}
+          {tab === "design" && (
+            <DesignStudio
+              onOpen={(id, dest) => {
+                setActiveProject(id);
+                setTab(dest === "designer" ? "designer" : "experiments");
+              }}
+            />
+          )}
           {tab === "library" && <LibraryHub />}
           {tab === "experiments" && <ExperimentDashboard activeProject={activeProject} setActiveProject={setActiveProject} />}
           {tab === "factory" && <FactoryPanel activeProject={activeProject} setActiveProject={setActiveProject} />}

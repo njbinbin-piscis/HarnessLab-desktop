@@ -4,8 +4,9 @@ import { AgentLibrary } from "./AgentLibrary";
 import { LibraryBrowser } from "./LibraryBrowser";
 import { ToolLibrary } from "./ToolLibrary";
 import { SkillLibrary } from "./SkillLibrary";
+import { AlgorithmStudio } from "./AlgorithmStudio";
 
-type LibTab = "agents" | "algorithms" | "tools" | "skills";
+type LibTab = "agents" | "algorithms" | "algoStudio" | "tools" | "skills";
 
 export function LibraryHub() {
   const t = useT();
@@ -18,7 +19,10 @@ export function LibraryHub() {
           {t("agentLibrary.tab")}
         </button>
         <button type="button" className={tab === "algorithms" ? "active" : ""} onClick={() => setTab("algorithms")}>
-          {t("nav.library")}
+          {t("library.tab")}
+        </button>
+        <button type="button" className={tab === "algoStudio" ? "active" : ""} onClick={() => setTab("algoStudio")}>
+          {t("algoStudio.tab")}
         </button>
         <button type="button" className={tab === "tools" ? "active" : ""} onClick={() => setTab("tools")}>
           {t("toolLibrary.tab")}
@@ -29,6 +33,7 @@ export function LibraryHub() {
       </div>
       {tab === "agents" && <AgentLibrary />}
       {tab === "algorithms" && <LibraryBrowser />}
+      {tab === "algoStudio" && <AlgorithmStudio />}
       {tab === "tools" && <ToolLibrary />}
       {tab === "skills" && <SkillLibrary />}
     </div>

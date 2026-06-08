@@ -1,23 +1,9 @@
 import { create } from "zustand";
 import {
-  AgentEvent, ApiError, api, CanvasRun, CollabState, ComponentSpec, EditOp, EditProposal,
+  AgentEvent, ApiError, api, CanvasRun, ComponentSpec, EditOp, EditProposal,
   isDesktop, Layout, NodeMetrics, Project, RunMsg, RuntimeRun, SessionNode,
 } from "../api";
 import { t } from "../i18n/index";
-
-function clientIdentity(): { id: string; name: string } {
-  let id = localStorage.getItem("hl_client_id");
-  if (!id) {
-    id = "c_" + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem("hl_client_id", id);
-  }
-  let name = localStorage.getItem("hl_client_name") || "";
-  if (!name) {
-    name = "User-" + id.slice(2, 6);
-    localStorage.setItem("hl_client_name", name);
-  }
-  return { id, name };
-}
 
 export type Selection =
   | { type: "agent"; id: string }
@@ -60,13 +46,6 @@ interface DesignerState {
   // P6 — undo / redo (project snapshots)
   undoStack: Project[];
   redoStack: Project[];
-  // collaboration
-  clientId: string;
-  clientName: string;
-  presence: CollabState["presence"];
-  locks: CollabState["locks"];
-  lease: CollabState["lease"];
-  handoff: CollabState["handoff"];
 
   load: (projectId: string) => Promise<void>;
   reload: () => Promise<void>;
@@ -90,22 +69,11 @@ interface DesignerState {
   applyProposal: () => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
-  startCollab: (projectId: string) => void;
-  stopCollab: () => void;
-  lockTarget: (target: string) => Promise<boolean>;
-  unlockTarget: (target: string) => void;
-  acquireLease: () => Promise<void>;
-  releaseLease: () => void;
-  requestLease: () => Promise<void>;
   loadRuns: () => Promise<void>;
   showRunOnCanvas: (runId: string | null) => void;
 }
 
-let runtimeSource: EventSource | null = null;
-
-let collabTimer: ReturnType<typeof setInterval> | null = null;
-let collabSource: EventSource | null = null;
-let collabSocket: WebSocket | null = null;
+let runtimeUnlisten: (() => void) | null = null;
 
 function computeMetrics(events: AgentEvent[]): Record<string, NodeMetrics> {
   const m: Record<string, NodeMetrics> = {};
@@ -154,12 +122,6 @@ export const useDesigner = create<DesignerState>((set, get) => ({
   proposal: null,
   undoStack: [],
   redoStack: [],
-  clientId: clientIdentity().id,
-  clientName: clientIdentity().name,
-  presence: [],
-  locks: {},
-  lease: null,
-  handoff: null,
 
   load: async (projectId: string) => {
     set({ projectId, status: "loading", error: "" });
@@ -197,16 +159,10 @@ export const useDesigner = create<DesignerState>((set, get) => ({
   applyOps: async (ops) => {
     const id = get().projectId;
     if (!id) return false;
-    // Don't even attempt an edit while someone else holds the exclusive lease.
-    const lease = get().lease;
-    if (lease && lease.client_id !== get().clientId) {
-      set({ error: t("errors.leaseReadonly", { name: lease.name }) });
-      return false;
-    }
     set({ status: "applying", error: "" });
     const current = get().project;
     try {
-      const res = await api.applyOps(id, ops, false, get().project?.rev, get().clientId);
+      const res = await api.applyOps(id, ops, false, get().project?.rev);
       set({
         project: res.project,
         status: "",
@@ -218,14 +174,9 @@ export const useDesigner = create<DesignerState>((set, get) => ({
       return true;
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        // a collaborator changed the project under us — refresh and warn
+        // the project changed under us (e.g. another window) — refresh and warn
         await get().reload();
         set({ error: t("errors.projectStale"), status: "" });
-        return false;
-      }
-      if (e instanceof ApiError && e.status === 423) {
-        const holder = (e.detail as { holder?: string })?.holder ?? "…";
-        set({ error: t("errors.leaseHolderReadonly", { holder }), status: "" });
         return false;
       }
       set({ error: String(e), status: "" });
@@ -347,8 +298,7 @@ export const useDesigner = create<DesignerState>((set, get) => ({
 
   startRuntimeMonitor: (projectId: string) => {
     get().stopRuntimeMonitor();
-    // Live runtime monitoring lands in P3; skip on the desktop for now.
-    if (isDesktop()) return;
+    if (!isDesktop()) return;
     const apply = (runs: RuntimeRun[], active: number) => {
       const phases: Record<string, string> = {};
       for (const r of runs) {
@@ -359,33 +309,18 @@ export const useDesigner = create<DesignerState>((set, get) => ({
       }
       set({ runtimeRuns: runs, runtimeActive: active, runtimeAgentPhase: phases });
     };
-    api.runtimeRuns(projectId).then(({ runs }) => {
-      apply(runs, runs.filter((r) => r.status === "running").length);
-    }).catch(() => {});
-    if (typeof EventSource === "undefined") return;
-    try {
-      const src = new EventSource(api.runtimeStreamUrl(projectId));
-      runtimeSource = src;
-      src.addEventListener("state", (e) => {
-        try {
-          const snap = JSON.parse((e as MessageEvent).data);
-          apply(snap.runs ?? [], snap.active ?? 0);
-        } catch {
-          /* ignore */
-        }
-      });
-      src.onerror = () => {
-        /* browser reconnects */
-      };
-    } catch {
-      /* ignore */
-    }
+    // Seed from the current snapshot, then subscribe to live updates.
+    api.runtimeRuns().then((snap) => apply(snap.runs, snap.active)).catch(() => {});
+    api
+      .onRuntimeUpdate((snap) => apply(snap.runs, snap.active))
+      .then((un) => { runtimeUnlisten = un; })
+      .catch(() => {});
   },
 
   stopRuntimeMonitor: () => {
-    if (runtimeSource) {
-      runtimeSource.close();
-      runtimeSource = null;
+    if (runtimeUnlisten) {
+      runtimeUnlisten();
+      runtimeUnlisten = null;
     }
     set({ runtimeRuns: [], runtimeActive: 0, runtimeAgentPhase: {} });
   },
@@ -438,157 +373,6 @@ export const useDesigner = create<DesignerState>((set, get) => ({
       set({ project: saved, undoStack: nextUndo, redoStack: nextRedo, status: "" });
     } catch (e) {
       set({ error: String(e), status: "" });
-    }
-  },
-
-  startCollab: (projectId: string) => {
-    get().stopCollab();
-    // Multi-user collaboration is dropped for the single-user desktop.
-    if (isDesktop()) return;
-    const { clientId, clientName } = get();
-    const apply = (st: CollabState) =>
-      set({ presence: st.presence, locks: st.locks, lease: st.lease, handoff: st.handoff ?? null });
-
-    // Prefer a single SSE connection (the open stream *is* our presence — no
-    // client heartbeat polling). Fall back to polling if SSE errors out.
-    const startPolling = () => {
-      if (collabTimer) return;
-      api.collabJoin(projectId, clientId, clientName).then(apply).catch(() => {});
-      collabTimer = setInterval(() => {
-        const id = get().projectId;
-        if (!id) return;
-        api.collabHeartbeat(id, clientId).then(apply).catch(() => {});
-      }, 4000);
-    };
-
-    // Opt-in bidirectional WebSocket transport (alternative to SSE + REST).
-    // Enable with `localStorage.setItem("hl_collab_ws", "1")`.
-    const wsEnabled = (() => {
-      try {
-        return localStorage.getItem("hl_collab_ws") === "1";
-      } catch {
-        return false;
-      }
-    })();
-    if (wsEnabled && typeof WebSocket !== "undefined") {
-      try {
-        const sock = new WebSocket(api.collabWsUrl(projectId, clientId, clientName));
-        collabSocket = sock;
-        sock.onmessage = (e) => {
-          try {
-            const msg = JSON.parse(e.data);
-            if (msg.type === "state") apply(msg.state as CollabState);
-          } catch {
-            /* ignore */
-          }
-        };
-        sock.onclose = () => {
-          if (collabSocket === sock) {
-            collabSocket = null;
-            startPolling();
-          }
-        };
-        return;
-      } catch {
-        /* fall through to SSE */
-      }
-    }
-
-    if (typeof EventSource !== "undefined") {
-      try {
-        const src = new EventSource(api.collabStreamUrl(projectId, clientId, clientName));
-        collabSource = src;
-        src.addEventListener("state", (e) => {
-          try {
-            apply(JSON.parse((e as MessageEvent).data));
-          } catch {
-            /* ignore */
-          }
-        });
-        src.onerror = () => {
-          // browser auto-reconnects; if it never opens, polling fallback covers us
-          if (src.readyState === EventSource.CLOSED) {
-            collabSource = null;
-            startPolling();
-          }
-        };
-        return;
-      } catch {
-        /* fall through to polling */
-      }
-    }
-    startPolling();
-  },
-
-  stopCollab: () => {
-    if (collabSocket) {
-      collabSocket.close();
-      collabSocket = null;
-    }
-    if (collabSource) {
-      collabSource.close();
-      collabSource = null;
-    }
-    if (collabTimer) {
-      clearInterval(collabTimer);
-      collabTimer = null;
-    }
-    const { projectId, clientId } = get();
-    if (projectId) api.collabLeave(projectId, clientId).catch(() => {});
-    set({ presence: [], locks: {}, lease: null, handoff: null });
-  },
-
-  lockTarget: async (target: string) => {
-    const { projectId, clientId } = get();
-    if (!projectId) return false;
-    try {
-      const r = await api.collabLock(projectId, clientId, target);
-      set({ presence: r.state.presence, locks: r.state.locks, lease: r.state.lease, handoff: r.state.handoff ?? null });
-      return r.ok;
-    } catch {
-      return false;
-    }
-  },
-
-  unlockTarget: (target: string) => {
-    const { projectId, clientId } = get();
-    if (!projectId) return;
-    api.collabUnlock(projectId, clientId, target)
-      .then((st) => set({ presence: st.presence, locks: st.locks, lease: st.lease, handoff: st.handoff ?? null }))
-      .catch(() => {});
-  },
-
-  acquireLease: async () => {
-    const { projectId, clientId, clientName } = get();
-    if (!projectId) return;
-    try {
-      const r = await api.leaseAcquire(projectId, clientId, clientName);
-      set({ presence: r.state.presence, locks: r.state.locks, lease: r.state.lease, handoff: r.state.handoff ?? null });
-      if (!r.ok) {
-        const holder = r.holder || "…";
-        set({ error: t("errors.leaseCannotAcquire", { holder }) });
-      }
-    } catch (e) {
-      set({ error: String(e) });
-    }
-  },
-
-  releaseLease: () => {
-    const { projectId, clientId } = get();
-    if (!projectId) return;
-    api.leaseRelease(projectId, clientId)
-      .then((st) => set({ presence: st.presence, locks: st.locks, lease: st.lease, handoff: st.handoff ?? null }))
-      .catch(() => {});
-  },
-
-  requestLease: async () => {
-    const { projectId, clientId, clientName } = get();
-    if (!projectId) return;
-    try {
-      const r = await api.leaseRequest(projectId, clientId, clientName);
-      set({ presence: r.state.presence, locks: r.state.locks, lease: r.state.lease, handoff: r.state.handoff ?? null });
-    } catch (e) {
-      set({ error: String(e) });
     }
   },
 

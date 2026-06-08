@@ -117,19 +117,13 @@ function ParamsEditor({ value, onCommit }: { value: Record<string, unknown>; onC
 
 function AgentInspector({ agent }: { agent: AgentSpec }) {
   const t = useT();
-  const { catalog, applyOps, locks, clientId } = useDesigner();
+  const { catalog, applyOps } = useDesigner();
   const [name, setName] = useState(agent.name);
 
   const setParam = (key: string, value: unknown) => applyOps([{ op: "set_param", agent: agent.name, key, value }]);
 
-  const lock = locks[`agent:${agent.name}`];
-  const lockedByOther = lock && lock.client_id !== clientId;
-
   return (
     <div className="insp-body">
-      {lockedByOther ? (
-        <div className="insp-lock-banner">🔒 {t("inspector.lockBanner", { name: lock.name })}</div>
-      ) : null}
       <label className="insp-field">
         <span>name</span>
         <input

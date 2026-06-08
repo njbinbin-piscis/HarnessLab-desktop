@@ -53,8 +53,8 @@ pub fn fetch_with_kind(
         let pkg = fetch(&resolved.source, dest_parent, config)?;
         return Ok((pkg, SourceKind::Registry));
     }
-    if source.starts_with("git+") {
-        let pkg = fetch_git(&source[4..], dest_parent)?;
+    if let Some(rest) = source.strip_prefix("git+") {
+        let pkg = fetch_git(rest, dest_parent)?;
         return Ok((pkg, SourceKind::Git));
     }
     if source.starts_with("https://") || source.starts_with("http://") {
@@ -66,8 +66,8 @@ pub fn fetch_with_kind(
             "unsupported URL source (expected .tar.gz or .tgz): {source}"
         ));
     }
-    if source.starts_with("file:") {
-        let pkg = fetch_local(&source[5..])?;
+    if let Some(rest) = source.strip_prefix("file:") {
+        let pkg = fetch_local(rest)?;
         return Ok((pkg, SourceKind::Local));
     }
     let pkg = fetch_local(source)?;
@@ -107,8 +107,8 @@ fn try_resolve_in_registry_url(
 }
 
 pub fn load_index(location: &str) -> Result<(RegistryIndex, Option<PathBuf>), String> {
-    let (text, base) = if location.starts_with("file:") {
-        let path = PathBuf::from(&location[5..]);
+    let (text, base) = if let Some(rest) = location.strip_prefix("file:") {
+        let path = PathBuf::from(rest);
         let path = if path.is_absolute() {
             path
         } else {
@@ -196,7 +196,7 @@ fn fetch_git(url: &str, dest_parent: &Path) -> Result<PathBuf, String> {
     };
     let work = dest_parent.join(format!(
         "git-{}",
-        hex::encode(Sha256::digest(repo_url.as_bytes()))[..8].to_string()
+        &hex::encode(Sha256::digest(repo_url.as_bytes()))[..8]
     ));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;

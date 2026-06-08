@@ -11,6 +11,7 @@ export function MarketPanel() {
   const [registries, setRegistries] = useState<string[]>([]);
   const [registryDraft, setRegistryDraft] = useState("");
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
+  const [search, setSearch] = useState("");
   const [inspectResult, setInspectResult] = useState<any | null>(null);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -18,9 +19,9 @@ export function MarketPanel() {
 
   const refresh = () => api.marketInstalled().then(setInstalled);
 
-  const loadCatalog = async () => {
+  const loadCatalog = async (query?: string) => {
     try {
-      setCatalog(await api.marketCatalog());
+      setCatalog(await api.marketCatalog(query ?? search));
       setErr("");
     } catch (e) {
       setErr(String(e));
@@ -35,7 +36,7 @@ export function MarketPanel() {
     api.marketGetRegistries().then((r) => {
       setRegistries(r);
       setRegistryDraft(r.join("\n"));
-    }).then(loadCatalog);
+    }).then(() => loadCatalog());
   }, []);
 
   const saveRegistries = async () => {
@@ -104,13 +105,26 @@ export function MarketPanel() {
             />
             <div className="panel-actions" style={{ marginTop: 8 }}>
               <button type="button" className="btn" onClick={saveRegistries}>{t("market.saveRegistries")}</button>
-              <button type="button" className="btn" onClick={loadCatalog}>{t("market.refreshCatalog")}</button>
+              <button type="button" className="btn" onClick={() => loadCatalog()}>{t("market.refreshCatalog")}</button>
             </div>
             {registries.length === 0 && (
               <p className="muted" style={{ marginTop: 8 }}>{t("market.noRegistries")}</p>
             )}
 
             <h3 style={{ marginTop: 16 }}>{t("market.availablePackages")}</h3>
+            <div className="control-row" style={{ marginBottom: 8 }}>
+              <input
+                style={{ flex: 1 }}
+                value={search}
+                placeholder={t("market.searchPlaceholder")}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") loadCatalog(); }}
+              />
+              <button type="button" className="btn" onClick={() => loadCatalog()}>{t("market.search")}</button>
+              {search && (
+                <button type="button" className="btn" onClick={() => { setSearch(""); loadCatalog(""); }}>{t("common.dash")}</button>
+              )}
+            </div>
             <div className="table-scroll">
               <table>
                 <thead>

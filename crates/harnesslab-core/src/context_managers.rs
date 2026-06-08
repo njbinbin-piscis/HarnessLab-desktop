@@ -42,7 +42,7 @@ impl harness_rt::context::ContextManager for KernelContextAdapter {
         let entries = self
             .inner
             .discover(root)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         let mut rendered = self.inner.render(&entries);
         if rendered.chars().count() > budget_chars {
             rendered = rendered.chars().take(budget_chars).collect();
@@ -83,23 +83,24 @@ impl ContextManager for ProjectContextManager {
         // 3. Look for kb/architecture/*.md
         let arch_pattern = root.join("kb").join("architecture").join("*.md");
         if let Some(pattern_str) = arch_pattern.to_str() {
-            for entry in glob(pattern_str).context("Failed to read glob pattern")? {
-                if let Ok(path) = entry {
-                    if path.is_file() {
-                        if let Ok(content) = std::fs::read_to_string(&path) {
-                            entries.push(ContextEntry {
-                                path,
-                                content,
-                                priority: 80,
-                            });
-                        }
+            for path in glob(pattern_str)
+                .context("Failed to read glob pattern")?
+                .flatten()
+            {
+                if path.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        entries.push(ContextEntry {
+                            path,
+                            content,
+                            priority: 80,
+                        });
                     }
                 }
             }
         }
 
         // Sort by priority descending
-        entries.sort_by(|a, b| b.priority.cmp(&a.priority));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.priority));
         Ok(entries)
     }
 
@@ -150,7 +151,7 @@ impl ContextManager for WorkspaceRootManager {
         }
 
         // Sort by priority descending
-        entries.sort_by(|a, b| b.priority.cmp(&a.priority));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.priority));
         Ok(entries)
     }
 
@@ -241,14 +242,50 @@ impl ContextManager for DynamicContextManager {
     fn discover(&self, root: &Path) -> Result<Vec<ContextEntry>> {
         let mut entries = Vec::new();
         collect_docs(root, &mut entries, 0);
-        // Rank by importance, then by size (larger docs first within a tier).
-        entries.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
-                .then(b.content.len().cmp(&a.content.len()))
+
+        // Embedding-based re-rank: prefer the most representative ("central")
+        // documents within each importance tier. Embeddings are local and
+        // dependency-free, so this is always available; on a single document it
+        // degrades to the filename/size heuristic below.
+        let embeds: Vec<Vec<f32>> = entries
+            .iter()
+            .map(|e| {
+                let name = e
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let snippet: String = e.content.chars().take(2000).collect();
+                crate::embeddings::embed(&format!("{name} {snippet}"))
+            })
+            .collect();
+        let centrality: Vec<f32> = (0..entries.len())
+            .map(|i| {
+                let mut s = 0f32;
+                for j in 0..embeds.len() {
+                    if i != j {
+                        s += crate::embeddings::cosine(&embeds[i], &embeds[j]);
+                    }
+                }
+                s
+            })
+            .collect();
+
+        let mut order: Vec<usize> = (0..entries.len()).collect();
+        order.sort_by(|&a, &b| {
+            entries[b]
+                .priority
+                .cmp(&entries[a].priority)
+                .then(
+                    centrality[b]
+                        .partial_cmp(&centrality[a])
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+                .then(entries[b].content.len().cmp(&entries[a].content.len()))
         });
-        entries.truncate(8);
-        Ok(entries)
+        let mut ranked: Vec<ContextEntry> = order.into_iter().map(|i| entries[i].clone()).collect();
+        ranked.truncate(8);
+        Ok(ranked)
     }
 
     fn render(&self, entries: &[ContextEntry]) -> String {

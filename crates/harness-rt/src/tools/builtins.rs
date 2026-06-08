@@ -723,6 +723,7 @@ impl Tool for RegisterAlgorithmTool {
             addendum: addendum.to_string(),
             reflective,
             max_iterations,
+            params: serde_json::Value::Null,
         };
         match crate::agent::declarative::register(&spec) {
             Ok(()) => ToolResult::ok(format!(
@@ -746,13 +747,11 @@ fn strip_tags(html: &str) -> String {
     let mut i = 0;
     while i < chars.len() {
         // Crude <script>/<style> skipping.
-        if !in_script && i + 7 <= bytes.len() && (&lower[i..]).starts_with("<script") {
+        if !in_script && i + 7 <= bytes.len() && lower[i..].starts_with("<script") {
             in_script = true;
         }
-        if in_script {
-            if (&lower[i..]).starts_with("</script") || (&lower[i..]).starts_with("</style") {
-                in_script = false;
-            }
+        if in_script && (lower[i..].starts_with("</script") || lower[i..].starts_with("</style")) {
+            in_script = false;
         }
         let c = chars[i];
         if c == '<' {

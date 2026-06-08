@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { api } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { api, AutoloopMsg, AutoloopRound } from "../api";
 import { useT } from "../i18n/context";
 import { Select } from "./Select";
 
@@ -18,6 +18,12 @@ export function ExperimentDashboard({ activeProject, setActiveProject }: Props) 
   const [current, setCurrent] = useState<any | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+
+  const [rounds, setRounds] = useState(3);
+  const [looping, setLooping] = useState(false);
+  const [trajectory, setTrajectory] = useState<AutoloopRound[]>([]);
+  const [loopMsg, setLoopMsg] = useState("");
+  const trajEndRef = useRef<HTMLDivElement>(null);
 
   const refreshBoard = () => api.leaderboard().then(setBoard).catch(() => {});
 
@@ -40,6 +46,42 @@ export function ExperimentDashboard({ activeProject, setActiveProject }: Props) 
     } catch (e) { setErr(String(e)); }
     finally { setBusy(false); }
   };
+
+  const runAutoloop = async () => {
+    if (!activeProject || looping) return;
+    setLooping(true);
+    setErr("");
+    setLoopMsg("");
+    setTrajectory([]);
+    try {
+      await api.runAutoloopChannel(activeProject, dataset, rounds, (msg: AutoloopMsg) => {
+        if (msg.type === "round") {
+          setTrajectory((tr) => [...tr, msg.round]);
+          setTimeout(() => trajEndRef.current?.scrollIntoView({ block: "end" }), 0);
+        } else if (msg.type === "result") {
+          setLoopMsg(
+            msg.saved_project_name
+              ? t("experiments.autoloopSaved", {
+                  name: msg.saved_project_name,
+                  acc: (msg.best_accuracy * 100).toFixed(0),
+                  round: msg.best_round,
+                })
+              : t("experiments.autoloopNoGain", { acc: (msg.best_accuracy * 100).toFixed(0) }),
+          );
+          api.listProjects().then(setProjects);
+          refreshBoard();
+        } else if (msg.type === "error") {
+          setErr(msg.message);
+        }
+      });
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setLooping(false);
+    }
+  };
+
+  const maxAcc = Math.max(0.0001, ...trajectory.map((r) => r.accuracy));
 
   return (
     <div className="panel panel-stack page-fill">
@@ -74,7 +116,68 @@ export function ExperimentDashboard({ activeProject, setActiveProject }: Props) 
             </button>
           </div>
         </div>
+        <div className="row nowrap" style={{ marginTop: 10, alignItems: "flex-end" }}>
+          <div className="col" style={{ flex: "0 0 auto" }}>
+            <label>{t("experiments.autoloopRounds")}</label>
+            <input
+              type="number"
+              min={1}
+              max={12}
+              value={rounds}
+              style={{ width: 80 }}
+              onChange={(e) => setRounds(Math.max(1, Math.min(12, Number(e.target.value) || 1)))}
+            />
+          </div>
+          <div className="col" style={{ flex: "0 0 auto" }}>
+            <button
+              type="button"
+              className="btn"
+              disabled={!activeProject || looping || busy}
+              title={t("experiments.autoloopHint")}
+              onClick={runAutoloop}
+            >
+              {looping ? t("experiments.autoloopRunning") : t("experiments.autoloop")}
+            </button>
+          </div>
+        </div>
         {err && <div className="err">{err}</div>}
+
+        {trajectory.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <h3>{t("experiments.autoloopTrajectory")}</h3>
+            <div className="autoloop-track">
+              {trajectory.map((r) => (
+                <div key={r.round} className="autoloop-bar-col" title={r.note}>
+                  <div className="autoloop-bar-wrap">
+                    <div
+                      className={"autoloop-bar" + (r.kept ? " kept" : "") + (r.baseline ? " base" : "")}
+                      style={{ height: `${Math.round((r.accuracy / maxAcc) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="autoloop-bar-label">{(r.accuracy * 100).toFixed(0)}%</div>
+                  <div className="muted autoloop-bar-round">{r.baseline ? t("experiments.autoloopBase") : `#${r.round}`}</div>
+                </div>
+              ))}
+            </div>
+            <div className="table-scroll" style={{ maxHeight: 180, marginTop: 8 }}>
+              <table>
+                <thead><tr><th>#</th><th>{t("experiments.accuracy")}</th><th>{t("experiments.autoloopChange")}</th><th></th></tr></thead>
+                <tbody>
+                  {trajectory.map((r) => (
+                    <tr key={r.round}>
+                      <td>{r.baseline ? t("experiments.autoloopBase") : r.round}</td>
+                      <td>{(r.accuracy * 100).toFixed(0)}%</td>
+                      <td className="muted">{r.instruction}</td>
+                      <td className="muted">{r.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div ref={trajEndRef} />
+            </div>
+            {loopMsg && <div className="muted" style={{ marginTop: 8 }}>{loopMsg}</div>}
+          </div>
+        )}
 
         {current && (
           <div style={{ marginTop: 16 }}>

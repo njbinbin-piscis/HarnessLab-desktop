@@ -211,9 +211,35 @@ fn coord_py(name: &str) -> String {
             wins[i if win_i else j] += 1
     best = max(range(len(candidates)), key=lambda x: wins[x])
     return candidates[best]"#,
+        "auction" => r#"    answers = [a(task) for a in agents]
+    def bid(text):
+        return len(text) + 5 * text.lower().count("because")
+    return max(answers, key=bid)"#,
+        "blackboard" => r#"    board = ""
+    for _ in range(3):
+        prev = board
+        for agent in agents:
+            board = agent("Improve the shared solution for: " + task, context=board)
+        if board.strip() == prev.strip():
+            break
+    return board"#,
+        "coscientist" => r###"    def by_role(role, fallback):
+        for a in agents:
+            if role in a.name.lower():
+                return a
+        return agents[min(fallback, len(agents) - 1)]
+    reflection, ranking = by_role("reflection", 1), by_role("ranking", 2)
+    evolution, meta = by_role("evolution", 3), agents[-1]
+    board = [a(task) for a in agents]
+    board_text = "\n".join("[H%d] %s" % (i, h) for i, h in enumerate(board))
+    review = reflection("Critique these hypotheses for: " + task, context=board_text)
+    ranked = ranking("Rank the hypotheses and state the best one for: " + task, context=board_text + "\n\n## Reflection\n" + review)
+    evolved = evolution("Improve the leading hypothesis for: " + task, context=ranked)
+    board.append(evolved)
+    return meta("Write the final research answer for: " + task, context="## Ranked\n" + ranked + "\n\n## Reflection\n" + review + "\n\n## Board\n" + "\n".join(board))"###,
         other => {
             return format!(
-                "    # TODO: port the '{other}' coordinator. Falling back to sequential.\n    context = \"\"\n    result = \"\"\n    for agent in agents:\n        result = agent(task, context=context)\n        context = (context + \"\\n\" + result).strip()\n    return result"
+                "    # Unknown coordinator '{other}' — using a sequential pipeline.\n    context = \"\"\n    result = \"\"\n    for agent in agents:\n        result = agent(task, context=context)\n        context = (context + \"\\n\" + result).strip()\n    return result"
             )
         }
     };
@@ -264,9 +290,55 @@ fn coord_ts(name: &str) -> String {
   let best = 0;
   for (let k = 1; k < wins.length; k++) if (wins[k] > wins[best]) best = k;
   return candidates[best];"#,
+        "group_chat" => r#"  let transcript = "";
+  for (let r = 0; r < 2; r++) {
+    for (const agent of agents) {
+      transcript += `\n[${agent.name}] ${await agent.run(task, transcript)}`;
+    }
+  }
+  return agents[agents.length - 1].run("Summarize the group's conclusion for: " + task, transcript);"#,
+        "map_reduce" => r#"  if (agents.length === 1) return agents[0].run(task);
+  const mappers = agents.slice(0, -1);
+  const reducer = agents[agents.length - 1];
+  const partials = await Promise.all(mappers.map((m) => m.run("Produce your partial analysis for: " + task)));
+  const mapped = mappers.map((m, i) => `[${m.name}] ${partials[i]}`).join("\n");
+  return reducer.run("Reduce these partial results into a final answer for: " + task, mapped);"#,
+        "hierarchical" => r#"  if (agents.length === 1) return agents[0].run(task);
+  const manager = agents[0];
+  const workers = agents.slice(1);
+  const plan = await manager.run("Decompose into subtasks, one per line, for: " + task);
+  const results: string[] = [];
+  for (const w of workers) results.push(await w.run(task, "Your assignment:\n" + plan));
+  const joined = workers.map((w, i) => `[${w.name}] ${results[i]}`).join("\n");
+  return manager.run("Integrate the workers' results into one final answer for: " + task, plan + "\n" + joined);"#,
+        "auction" => r#"  const answers = await Promise.all(agents.map((a) => a.run(task)));
+  const bid = (t: string) => t.length + 5 * (t.toLowerCase().split("because").length - 1);
+  let best = answers[0];
+  for (const a of answers) if (bid(a) > bid(best)) best = a;
+  return best;"#,
+        "blackboard" => r#"  let board = "";
+  for (let r = 0; r < 3; r++) {
+    const prev = board;
+    for (const agent of agents) board = await agent.run("Improve the shared solution for: " + task, board);
+    if (board.trim() === prev.trim()) break;
+  }
+  return board;"#,
+        "coscientist" => r###"  const byRole = (role: string, fb: number) =>
+    agents.find((a) => a.name.toLowerCase().includes(role)) ?? agents[Math.min(fb, agents.length - 1)];
+  const reflection = byRole("reflection", 1);
+  const ranking = byRole("ranking", 2);
+  const evolution = byRole("evolution", 3);
+  const meta = agents[agents.length - 1];
+  const board = await Promise.all(agents.map((a) => a.run(task)));
+  const boardText = board.map((h, i) => `[H${i}] ${h}`).join("\n");
+  const review = await reflection.run("Critique these hypotheses for: " + task, boardText);
+  const ranked = await ranking.run("Rank the hypotheses and state the best one for: " + task, boardText + "\n\n## Reflection\n" + review);
+  const evolved = await evolution.run("Improve the leading hypothesis for: " + task, ranked);
+  board.push(evolved);
+  return meta.run("Write the final research answer for: " + task, "## Ranked\n" + ranked + "\n\n## Reflection\n" + review + "\n\n## Board\n" + board.join("\n"));"###,
         other => {
             return format!(
-                "  // TODO: port the '{other}' coordinator. Falling back to sequential.\n  let context = \"\";\n  let result = \"\";\n  for (const agent of agents) {{\n    result = await agent.run(task, context);\n    context = `${{context}}\\n${{result}}`.trim();\n  }}\n  return result;"
+                "  // Unknown coordinator '{other}' — using a sequential pipeline.\n  let context = \"\";\n  let result = \"\";\n  for (const agent of agents) {{\n    result = await agent.run(task, context);\n    context = `${{context}}\\n${{result}}`.trim();\n  }}\n  return result;"
             )
         }
     };
@@ -319,9 +391,68 @@ fn coord_rs(name: &str) -> String {
     let mut best = 0usize;
     for k in 1..wins.len() { if wins[k] > wins[best] { best = k; } }
     candidates[best].clone()"#,
+        "debate" => r#"    let answers: Vec<String> = agents.iter().map(|a| a.run(task, "")).collect();
+    let board: String = agents.iter().zip(&answers).map(|(a, ans)| format!("[{}] {}", a.name, ans)).collect::<Vec<_>>().join("\n");
+    let refined: Vec<String> = agents.iter().map(|a| a.run(&format!("Critique others and refine for: {}", task), &board)).collect();
+    let board2: String = agents.iter().zip(&refined).map(|(a, c)| format!("[{}] {}", a.name, c)).collect::<Vec<_>>().join("\n");
+    agents[0].run(&format!("Reconcile the debate into one answer for: {}", task), &board2)"#,
+        "group_chat" => r#"    let mut transcript = String::new();
+    for _ in 0..2 {
+        for agent in agents {
+            let reply = agent.run(task, &transcript);
+            transcript.push_str(&format!("\n[{}] {}", agent.name, reply));
+        }
+    }
+    agents[agents.len() - 1].run(&format!("Summarize the group's conclusion for: {}", task), &transcript)"#,
+        "map_reduce" => r#"    if agents.len() == 1 { return agents[0].run(task, ""); }
+    let (mappers, reducer) = agents.split_at(agents.len() - 1);
+    let reducer = &reducer[0];
+    let mut mapped = String::new();
+    for m in mappers {
+        let p = m.run(&format!("Produce your partial analysis for: {}", task), "");
+        mapped.push_str(&format!("[{}] {}\n", m.name, p));
+    }
+    reducer.run(&format!("Reduce these partial results into a final answer for: {}", task), &mapped)"#,
+        "hierarchical" => r#"    if agents.len() == 1 { return agents[0].run(task, ""); }
+    let manager = &agents[0];
+    let workers = &agents[1..];
+    let plan = manager.run(&format!("Decompose into subtasks, one per line, for: {}", task), "");
+    let mut joined = String::new();
+    for w in workers {
+        let r = w.run(task, &format!("Your assignment:\n{}", plan));
+        joined.push_str(&format!("[{}] {}\n", w.name, r));
+    }
+    manager.run(&format!("Integrate the workers' results into one final answer for: {}", task), &format!("{}\n{}", plan, joined))"#,
+        "auction" => r#"    let answers: Vec<String> = agents.iter().map(|a| a.run(task, "")).collect();
+    let bid = |t: &str| t.len() as i64 + 5 * t.to_lowercase().matches("because").count() as i64;
+    answers.iter().max_by_key(|t| bid(t.as_str())).cloned().unwrap_or_default()"#,
+
+        "blackboard" => r#"    let mut board = String::new();
+    for _ in 0..3 {
+        let prev = board.clone();
+        for agent in agents {
+            board = agent.run(&format!("Improve the shared solution for: {}", task), &board);
+        }
+        if board.trim() == prev.trim() { break; }
+    }
+    board"#,
+        "coscientist" => r###"    let by_role = |role: &str, fb: usize| -> &Agent {
+        agents.iter().find(|a| a.name.to_lowercase().contains(role)).unwrap_or(&agents[fb.min(agents.len() - 1)])
+    };
+    let reflection = by_role("reflection", 1);
+    let ranking = by_role("ranking", 2);
+    let evolution = by_role("evolution", 3);
+    let meta = &agents[agents.len() - 1];
+    let mut board: Vec<String> = agents.iter().map(|a| a.run(task, "")).collect();
+    let board_text: String = board.iter().enumerate().map(|(i, h)| format!("[H{}] {}", i, h)).collect::<Vec<_>>().join("\n");
+    let review = reflection.run(&format!("Critique these hypotheses for: {}", task), &board_text);
+    let ranked = ranking.run(&format!("Rank the hypotheses and state the best one for: {}", task), &format!("{}\n\n## Reflection\n{}", board_text, review));
+    let evolved = evolution.run(&format!("Improve the leading hypothesis for: {}", task), &ranked);
+    board.push(evolved);
+    meta.run(&format!("Write the final research answer for: {}", task), &format!("## Ranked\n{}\n\n## Reflection\n{}\n\n## Board\n{}", ranked, review, board.join("\n")))"###,
         other => {
             return format!(
-                "    // TODO: port the '{other}' coordinator. Falling back to sequential.\n    let mut context = String::new();\n    let mut result = String::new();\n    for agent in agents {{\n        result = agent.run(task, &context);\n        context = format!(\"{{}}\\n{{}}\", context, result).trim().to_string();\n    }}\n    result"
+                "    // Unknown coordinator '{other}' — using a sequential pipeline.\n    let mut context = String::new();\n    let mut result = String::new();\n    for agent in agents {{\n        result = agent.run(task, &context);\n        context = format!(\"{{}}\\n{{}}\", context, result).trim().to_string();\n    }}\n    result"
             )
         }
     };
@@ -436,13 +567,12 @@ def complete(system: str, user: str, model: str = {model}) -> str:
 
     // coordinator.py
     let mut coord = String::from("\"\"\"Coordination logic generated from the project topology.\"\"\"\nfrom __future__ import annotations\n\nfrom .agents import Agent\n\n\ndef coordinate(task: str, agents: list[Agent]) -> str:\n");
-    if ir.mode == "single" || ir.coordinator.is_none() {
-        coord.push_str("    # Single-agent topology.\n    return agents[0].run(task)\n");
-    } else {
-        let name = ir.coordinator.as_ref().unwrap();
+    if let (false, Some(name)) = (ir.mode == "single", ir.coordinator.as_ref()) {
         coord.push_str(&format!("    # Coordinator: {name}\n"));
         coord.push_str(&coord_py(name));
         coord.push('\n');
+    } else {
+        coord.push_str("    # Single-agent topology.\n    return agents[0].run(task)\n");
     }
     files.insert(format!("{}/coordinator.py", ir.slug), coord);
 
@@ -533,13 +663,12 @@ fn emit_typescript(ir: &ProjectIr, options: &Value) -> BTreeMap<String, String> 
 
     // src/coordinator.ts
     let mut coord = String::from("// Coordination logic generated from the project topology.\nimport { Agent } from \"./agents.js\";\n\nexport async function coordinate(task: string, agents: Agent[]): Promise<string> {\n");
-    if ir.mode == "single" || ir.coordinator.is_none() {
-        coord.push_str("  // Single-agent topology.\n  return agents[0].run(task);\n");
-    } else {
-        let name = ir.coordinator.as_ref().unwrap();
+    if let (false, Some(name)) = (ir.mode == "single", ir.coordinator.as_ref()) {
         coord.push_str(&format!("  // Coordinator: {name}\n"));
         coord.push_str(&coord_ts(name));
         coord.push('\n');
+    } else {
+        coord.push_str("  // Single-agent topology.\n  return agents[0].run(task);\n");
     }
     coord.push_str("}\n");
     files.insert("src/coordinator.ts".into(), coord);
@@ -696,13 +825,12 @@ fn fnv1a(s: &str) -> u64 {
 
     // src/coordinator.rs
     let mut coord = String::from("//! Coordination logic generated from the project topology.\n\nuse crate::agents::Agent;\n\npub fn coordinate(task: &str, agents: &[Agent]) -> String {\n");
-    if ir.mode == "single" || ir.coordinator.is_none() {
-        coord.push_str("    // Single-agent topology.\n    agents[0].run(task, \"\")\n");
-    } else {
-        let name = ir.coordinator.as_ref().unwrap();
+    if let (false, Some(name)) = (ir.mode == "single", ir.coordinator.as_ref()) {
         coord.push_str(&format!("    // Coordinator: {name}\n"));
         coord.push_str(&coord_rs(name));
         coord.push('\n');
+    } else {
+        coord.push_str("    // Single-agent topology.\n    agents[0].run(task, \"\")\n");
     }
     coord.push_str("}\n");
     files.insert("src/coordinator.rs".into(), coord);

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useT } from "../i18n/context";
 import { Select } from "./Select";
+import { FileTree } from "./FileTree";
+import { CodeViewer } from "./CodeViewer";
 
 interface Props {
   activeProject: string | null;
@@ -118,14 +120,13 @@ export function FactoryPanel({ activeProject, setActiveProject }: Props) {
       {fileKeys.length > 0 && (
         <div className="factory-output">
           <div className="factory-files">
-            {fileKeys.map((f) => (
-              <div key={f} className="card" style={{ cursor: "pointer", borderColor: selected === f ? "var(--accent)" : undefined }} onClick={() => setSelected(f)}>
-                {f}
-              </div>
-            ))}
+            <FileTree files={fileKeys} selected={selected} onSelect={setSelected} />
           </div>
           <div className="factory-code-col">
-            <div className="code">{files[selected]}</div>
+            {selected && (
+              <div className="factory-code-head" title={selected}>{selected}</div>
+            )}
+            <CodeViewer code={files[selected] ?? ""} path={selected} />
           </div>
         </div>
       )}

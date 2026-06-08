@@ -115,6 +115,32 @@ impl CompactionStrategy for SummaryCompaction {
     }
 }
 
+/// A declaratively-authored summary compaction with a custom name and header.
+/// Behaves like [`SummaryCompaction`] but reports its own catalog name so the
+/// Architect's hot-registered compaction strategies are distinguishable.
+pub struct TemplatedSummaryCompaction {
+    name: String,
+    inner: SummaryCompaction,
+}
+
+impl TemplatedSummaryCompaction {
+    pub fn new(name: impl Into<String>, header: Option<String>) -> Self {
+        Self {
+            name: name.into(),
+            inner: SummaryCompaction { prompt: header },
+        }
+    }
+}
+
+impl CompactionStrategy for TemplatedSummaryCompaction {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn compact(&self, messages: Vec<LlmMessage>, max_tokens: u32) -> Vec<LlmMessage> {
+        self.inner.compact(messages, max_tokens)
+    }
+}
+
 /// Keep recent turns plus the older turns most lexically similar to the latest.
 pub struct VectorRetrievalCompaction;
 impl CompactionStrategy for VectorRetrievalCompaction {

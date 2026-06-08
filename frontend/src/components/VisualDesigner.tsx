@@ -255,74 +255,16 @@ function OverlayBadge() {
   );
 }
 
-function LeaseControl() {
-  const t = useT();
-  const { lease, handoff, clientId, acquireLease, releaseLease, requestLease } = useDesigner();
-  // Someone else holds the lease → show read-only badge + a "request access" nudge.
-  if (lease && lease.client_id !== clientId) {
-    const asked = !!handoff && handoff.client_id === clientId;
-    return (
-      <span className="lease-group">
-        <span className="lease-badge other" title={t("designer.leaseLockedTitle")}>🔒 {t("designer.leaseEditing", { name: lease.name })}</span>
-        <button
-          className="btn lease-request"
-          onClick={requestLease}
-          disabled={asked}
-          title={t("designer.leaseAskTitle")}
-        >
-          {asked ? t("designer.leaseRequested") : t("designer.leaseRequest")}
-        </button>
-      </span>
-    );
-  }
-  // I hold the lease → release button, with a notice if someone is waiting.
-  if (lease && lease.client_id === clientId) {
-    const waiting = handoff && handoff.client_id !== clientId;
-    return (
-      <button
-        className={"btn lease-mine" + (waiting ? " lease-wanted" : "")}
-        onClick={releaseLease}
-        title={waiting ? t("designer.leaseHandoffTitle", { name: handoff!.name }) : t("designer.leaseReleaseTitle")}
-      >
-        {waiting ? t("designer.leaseReleaseWaiting", { name: handoff!.name }) : t("designer.leaseRelease")}
-      </button>
-    );
-  }
-  return <button type="button" className="btn" onClick={acquireLease} title={t("designer.leaseAcquireTitle")}>{t("designer.leaseAcquire")}</button>;
-}
-
-function PresenceBar() {
-  const t = useT();
-  const { presence, clientId } = useDesigner();
-  if (presence.length === 0) return null;
-  return (
-    <div className="presence" title={t("designer.presenceViewing", { count: presence.length })}>
-      {presence.map((p) => (
-        <span
-          key={p.client_id}
-          className={"presence-chip" + (p.client_id === clientId ? " me" : "")}
-          style={{ background: p.color }}
-          title={p.name + (p.client_id === clientId ? " (you)" : "")}
-        >
-          {p.name.slice(0, 2).toUpperCase()}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 export function VisualDesigner({ activeProject, setActiveProject }: Props) {
   const t = useT();
-  const { projectId, project, status, selection, lease, clientId, load, applyOps, setNodePos, undo, redo, undoStack, redoStack, startCollab, stopCollab, lockTarget, unlockTarget, sessionPanelOpen, setSessionPanelOpen, runtimeActive, startRuntimeMonitor, stopRuntimeMonitor } =
+  const { projectId, project, status, load, applyOps, setNodePos, undo, redo, undoStack, redoStack, sessionPanelOpen, setSessionPanelOpen, runtimeActive, startRuntimeMonitor, stopRuntimeMonitor } =
     useDesigner();
-  const readOnly = !!lease && lease.client_id !== clientId;
   const [projects, setProjects] = useState<{ id: string; name: string }[]>([]);
   const [templates, setTemplates] = useState<{ id: string; name: string }[]>([]);
   const [templatePick, setTemplatePick] = useState("");
   const [libraryAgents, setLibraryAgents] = useState<{ id: string; name: string }[]>([]);
   const [agentPick, setAgentPick] = useState("");
   const [dockOpen, setDockOpen] = useState(true);
-  const lockedRef = useRef<string | null>(null);
 
   useEffect(() => {
     api.listProjects().then(setProjects).catch(() => {});
@@ -331,7 +273,7 @@ export function VisualDesigner({ activeProject, setActiveProject }: Props) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || readOnly) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
       if (e.key === "z" && !e.shiftKey) {
         e.preventDefault();
         undo();
@@ -342,7 +284,7 @@ export function VisualDesigner({ activeProject, setActiveProject }: Props) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, readOnly]);
+  }, [undo, redo]);
 
   useEffect(() => {
     if (activeProject && activeProject !== projectId) load(activeProject);
@@ -350,26 +292,11 @@ export function VisualDesigner({ activeProject, setActiveProject }: Props) {
 
   useEffect(() => {
     if (!projectId) return;
-    startCollab(projectId);
     startRuntimeMonitor(projectId);
     return () => {
-      stopCollab();
       stopRuntimeMonitor();
     };
-  }, [projectId, startCollab, stopCollab, startRuntimeMonitor, stopRuntimeMonitor]);
-
-  // Soft-lock the selected agent so collaborators see who's editing it.
-  useEffect(() => {
-    const want = selection?.type === "agent" ? `agent:${selection.id}` : null;
-    if (lockedRef.current && lockedRef.current !== want) {
-      unlockTarget(lockedRef.current);
-      lockedRef.current = null;
-    }
-    if (want) {
-      lockTarget(want);
-      lockedRef.current = want;
-    }
-  }, [selection, lockTarget, unlockTarget]);
+  }, [projectId, startRuntimeMonitor, stopRuntimeMonitor]);
 
   const importFromLibrary = async (libraryId: string) => {
     if (!libraryId || !project) return;
@@ -414,29 +341,26 @@ export function VisualDesigner({ activeProject, setActiveProject }: Props) {
             setAgentPick("");
             if (id) importFromLibrary(id);
           }}
-          disabled={!project || readOnly}
+          disabled={!project}
           placeholder={t("agentLibrary.addToProject")}
           options={libraryAgents
             .filter((a) => !project?.agents.some((ag) => ag.name === a.name))
             .map((a) => ({ value: a.id, label: a.name }))}
         />
-        <button type="button" className="btn" onClick={autoLayout} disabled={!project || readOnly} title="Dagre auto-layout">{t("designer.autoLayout")}</button>
-        <button type="button" className="btn" onClick={undo} disabled={!project || readOnly || undoStack.length === 0} title="Ctrl+Z">{t("designer.undo")}</button>
-        <button type="button" className="btn" onClick={redo} disabled={!project || readOnly || redoStack.length === 0} title="Ctrl+Shift+Z">{t("designer.redo")}</button>
+        <button type="button" className="btn" onClick={autoLayout} disabled={!project} title="Dagre auto-layout">{t("designer.autoLayout")}</button>
+        <button type="button" className="btn" onClick={undo} disabled={!project || undoStack.length === 0} title="Ctrl+Z">{t("designer.undo")}</button>
+        <button type="button" className="btn" onClick={redo} disabled={!project || redoStack.length === 0} title="Ctrl+Shift+Z">{t("designer.redo")}</button>
         <Select
           value={templatePick}
           onChange={(id) => {
             setTemplatePick("");
             if (id) createFromTemplate(id);
           }}
-          disabled={readOnly}
           placeholder={t("designer.template")}
           options={templates.map((tpl) => ({ value: tpl.id, label: tpl.name }))}
           aria-label="New project from template"
         />
         <span className="spacer" />
-        <LeaseControl />
-        <PresenceBar />
         {status ? <span className="muted">{status}…</span> : null}
         {runtimeActive > 0 ? (
           <span className="runtime-badge" title="agent run in progress">{t("designer.runningBadge", { count: runtimeActive })}</span>

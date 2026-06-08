@@ -204,7 +204,7 @@ pub async fn run_eval(
     dataset: &Dataset,
     base_workspace: &Path,
 ) -> Result<EvalRun, String> {
-    let scorer = if harness_rt::scoring::SCORERS.contains(&dataset.scorer.as_str()) {
+    let scorer = if harness_rt::scoring::is_known_scorer(&dataset.scorer) {
         dataset.scorer.clone()
     } else {
         return Err(format!("unknown scorer '{}'", dataset.scorer));

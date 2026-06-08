@@ -34,8 +34,16 @@ pub fn score(scorer: &str, prediction: &str, reference: &str, params: &Value) ->
         "rubric_overlap" => rubric_overlap(prediction, reference, params),
         "llm_judge" => llm_judge(prediction, reference),
         "weighted_rubric" => weighted_rubric(prediction, reference, params),
-        _ => f1(prediction, reference),
+        // Fall through to contributed (Architect-authored) scorers before the
+        // lenient f1 default.
+        other => crate::agent::contrib::score_with_contrib(other, prediction, reference, params)
+            .unwrap_or_else(|| f1(prediction, reference)),
     }
+}
+
+/// Whether `name` is a known scorer — a built-in or a contributed one.
+pub fn is_known_scorer(name: &str) -> bool {
+    SCORERS.contains(&name) || crate::agent::contrib::has_scorer(name)
 }
 
 fn normalize(s: &str) -> String {

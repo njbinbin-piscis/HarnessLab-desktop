@@ -152,20 +152,20 @@ pub fn propose_ops(project: &Project, instruction: &str) -> CopilotProposal {
         .find_map(|(kind, names)| find_word(&clause, names).map(|ref_name| (*kind, ref_name)));
 
         // remove agent
-        if clause.contains("remove") || clause.contains("delete") || clause.contains("drop") {
-            if clause.contains("agent") {
-                let target = clause
-                    .split_whitespace()
-                    .find(|w| known_agents.iter().any(|a| a == *w))
-                    .map(|s| s.to_string())
-                    .or(agent.clone());
-                if let Some(name) = target {
-                    if known_agents.contains(&name) {
-                        ops.push(json!({ "op": "remove_agent", "name": name }));
-                        known_agents.retain(|a| a != &name);
-                        notes.push(format!("Remove agent '{name}'."));
-                        continue;
-                    }
+        if (clause.contains("remove") || clause.contains("delete") || clause.contains("drop"))
+            && clause.contains("agent")
+        {
+            let target = clause
+                .split_whitespace()
+                .find(|w| known_agents.iter().any(|a| a == *w))
+                .map(|s| s.to_string())
+                .or(agent.clone());
+            if let Some(name) = target {
+                if known_agents.contains(&name) {
+                    ops.push(json!({ "op": "remove_agent", "name": name }));
+                    known_agents.retain(|a| a != &name);
+                    notes.push(format!("Remove agent '{name}'."));
+                    continue;
                 }
             }
         }
@@ -183,18 +183,16 @@ pub fn propose_ops(project: &Project, instruction: &str) -> CopilotProposal {
         }
 
         // detach tool
-        if tool.is_some()
-            && agent.is_some()
-            && (clause.contains("remove")
+        if let (Some(t), Some(a)) = (tool.clone(), agent.clone()) {
+            if clause.contains("remove")
                 || clause.contains("detach")
                 || clause.contains("disallow")
-                || clause.contains("disable"))
-        {
-            let t = tool.unwrap();
-            let a = agent.unwrap();
-            ops.push(json!({ "op": "detach_tool", "agent": a, "tool": t }));
-            notes.push(format!("Detach tool '{t}' from '{a}'."));
-            continue;
+                || clause.contains("disable")
+            {
+                ops.push(json!({ "op": "detach_tool", "agent": a, "tool": t }));
+                notes.push(format!("Detach tool '{t}' from '{a}'."));
+                continue;
+            }
         }
 
         // attach tool
@@ -391,10 +389,10 @@ fn parse_token_budget(clause: &str) -> Option<u64> {
     {
         return first_number(clause);
     }
-    if clause.contains("tokens") || clause.contains("token") {
-        if clause.contains("cap") || clause.contains("total") {
-            return first_number(clause);
-        }
+    if (clause.contains("tokens") || clause.contains("token"))
+        && (clause.contains("cap") || clause.contains("total"))
+    {
+        return first_number(clause);
     }
     None
 }
@@ -453,7 +451,14 @@ Reply with a single JSON array of ops. Allowed ops:
 {"op":"add_dataset","dataset":str}, {"op":"remove_dataset","dataset":str}.
 Emit only the JSON array."#;
 
-async fn try_llm_ops(project: &Project, instruction: &str) -> Result<CopilotProposal, String> {
+/// Run a single LLM turn with `system_prompt` over one `user` message and return
+/// the streamed assistant text. Shared by the project copilot and the algorithm
+/// author so both reuse the same engine wiring.
+async fn run_oneshot_agent(
+    system_prompt: &str,
+    user: &str,
+    max_turns: u32,
+) -> Result<String, String> {
     use harness_rt::agent::loop_::AgentLoop;
     use harness_rt::agent::messages::AgentEvent;
     use harness_rt::agent::tool::{ToolContext, ToolRegistry, ToolSettings};
@@ -471,21 +476,11 @@ async fn try_llm_ops(project: &Project, instruction: &str) -> Result<CopilotProp
     };
 
     let model = std::env::var("HARNESSLAB_DEFAULT_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
-    let brief = format!(
-        "Current project: {}\nInstruction: {}",
-        serde_json::to_string(project)
-            .unwrap_or_default()
-            .chars()
-            .take(2000)
-            .collect::<String>(),
-        instruction
-    );
-
     let cfg = crate::runner::agent_config_for(&{
         let mut spec = crate::project::AgentSpec::new("Copilot");
         spec.model = model;
-        spec.system_prompt = COPILOT_SYSTEM.to_string();
-        spec.max_turns = 2;
+        spec.system_prompt = system_prompt.to_string();
+        spec.max_turns = max_turns;
         spec
     });
 
@@ -516,7 +511,7 @@ async fn try_llm_ops(project: &Project, instruction: &str) -> Result<CopilotProp
     };
     let messages = vec![LlmMessage {
         role: "user".to_string(),
-        content: MessageContent::text(&brief),
+        content: MessageContent::text(user),
     }];
     let handle = tokio::spawn(async move { agent.run(messages, tx, cancel, ctx).await });
 
@@ -527,13 +522,246 @@ async fn try_llm_ops(project: &Project, instruction: &str) -> Result<CopilotProp
         }
     }
     let _ = handle.await;
+    Ok(text)
+}
 
+async fn try_llm_ops(project: &Project, instruction: &str) -> Result<CopilotProposal, String> {
+    let brief = format!(
+        "Current project: {}\nInstruction: {}",
+        serde_json::to_string(project)
+            .unwrap_or_default()
+            .chars()
+            .take(2000)
+            .collect::<String>(),
+        instruction
+    );
+    let text = run_oneshot_agent(COPILOT_SYSTEM, &brief, 2).await?;
     let ops = extract_json_array(&text)?;
     Ok(CopilotProposal {
         ops,
         explanation: "Proposed by the LLM copilot.".to_string(),
         source: "agent".to_string(),
     })
+}
+
+// ── Algorithm author (Algorithm Assistant) ──────────────────────────────────
+
+use harness_rt::agent::declarative::DeclarativeAlgorithm;
+
+/// An authored/edited declarative algorithm plus a short note and its source.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthoredAlgorithm {
+    pub algorithm: DeclarativeAlgorithm,
+    pub explanation: String,
+    pub source: String,
+}
+
+const AUTHOR_SYSTEM: &str = r#"You author a declarative algorithm for an LLM agent, expressed as a single JSON object.
+Schema: {"kind":"loop"|"compaction"|"context"|"scorer","name":snake_case_string,"description":string,"addendum":string,"reflective":boolean,"max_iterations":integer-or-null,"params":object}.
+- "addendum" is prompt/template guidance (the heart of loop/compaction/context algorithms).
+- "reflective" (loop only) true means the agent self-reviews before finishing.
+- For kind "context", set params {"keywords":[...]} to select matching docs.
+- For kind "scorer", set params {"base":"rubric_overlap"|"weighted_rubric"|"f1"|"contains"|"exact_match","keywords":[...]} (or "criteria":[{"keywords":[...],"weight":n}] for weighted_rubric); "addendum" may be empty.
+- Keep "name" a short, valid snake_case identifier. Use exactly the requested kind.
+If a current algorithm is given, modify it per the instruction and keep its name and kind.
+Reply with ONLY the JSON object, no prose."#;
+
+/// LLM author with deterministic rule fallback (no key / parse failure).
+///
+/// `kind` requests a specific component kind (loop/compaction/context/scorer);
+/// when `None` the author defaults to `loop` (or keeps the current kind).
+pub async fn author_algorithm_llm(
+    instruction: &str,
+    current: Option<&DeclarativeAlgorithm>,
+    kind: Option<&str>,
+) -> AuthoredAlgorithm {
+    if !llm_available() {
+        return author_algorithm_rules(instruction, current, kind);
+    }
+    match try_author_llm(instruction, current, kind).await {
+        Ok(a) => a,
+        Err(_) => author_algorithm_rules(instruction, current, kind),
+    }
+}
+
+fn resolved_kind(current: Option<&DeclarativeAlgorithm>, kind: Option<&str>) -> String {
+    kind.map(|k| k.trim())
+        .filter(|k| !k.is_empty())
+        .map(|k| k.to_string())
+        .or_else(|| current.map(|c| c.kind.clone()))
+        .unwrap_or_else(|| "loop".to_string())
+}
+
+async fn try_author_llm(
+    instruction: &str,
+    current: Option<&DeclarativeAlgorithm>,
+    kind: Option<&str>,
+) -> Result<AuthoredAlgorithm, String> {
+    let want_kind = resolved_kind(current, kind);
+    let user = match current {
+        Some(c) => format!(
+            "Current algorithm: {}\nModify it per this instruction: {instruction}",
+            serde_json::to_string(c).unwrap_or_default()
+        ),
+        None => format!("Author a new algorithm of kind \"{want_kind}\" for: {instruction}"),
+    };
+    let text = run_oneshot_agent(AUTHOR_SYSTEM, &user, 2).await?;
+    let obj = extract_json_object(&text)?;
+    let mut algo: DeclarativeAlgorithm = serde_json::from_value(obj).map_err(|e| e.to_string())?;
+    // Honor the explicitly requested kind over whatever the model emitted.
+    if kind.map(|k| !k.trim().is_empty()).unwrap_or(false) || algo.kind.trim().is_empty() {
+        algo.kind = want_kind;
+    }
+    if algo.name.trim().is_empty() {
+        return Err("authored algorithm missing name".into());
+    }
+    Ok(AuthoredAlgorithm {
+        algorithm: algo,
+        explanation: "Authored by the LLM.".to_string(),
+        source: "agent".to_string(),
+    })
+}
+
+/// Deterministic author — dependency-free, always available.
+pub fn author_algorithm_rules(
+    instruction: &str,
+    current: Option<&DeclarativeAlgorithm>,
+    kind: Option<&str>,
+) -> AuthoredAlgorithm {
+    let want_kind = resolved_kind(current, kind);
+    let lower = instruction.to_lowercase();
+    let reflective = current.map(|c| c.reflective).unwrap_or(false)
+        || [
+            "reflect",
+            "review",
+            "critique",
+            "self-check",
+            "verify",
+            "double-check",
+        ]
+        .iter()
+        .any(|k| lower.contains(k));
+
+    let counted = first_number(&lower).filter(|_| {
+        ["iteration", "iter", "step", "turn", "round", "pass"]
+            .iter()
+            .any(|k| lower.contains(k))
+    });
+    let max_iterations = counted
+        .map(|n| n as usize)
+        .or_else(|| current.and_then(|c| c.max_iterations));
+
+    let name = current
+        .map(|c| c.name.clone())
+        .unwrap_or_else(|| slugify(instruction));
+
+    let description = match current {
+        Some(c) if !c.description.trim().is_empty() => c.description.clone(),
+        _ => instruction.chars().take(160).collect(),
+    };
+
+    let addendum = match current {
+        Some(c) if !c.addendum.trim().is_empty() => {
+            format!(
+                "{}\nAdditional guidance: {}",
+                c.addendum.trim(),
+                instruction.trim()
+            )
+        }
+        _ => format!(
+            "Work through each task using this strategy: {}. \
+             Think step by step, state intermediate reasoning, then give the final answer.",
+            instruction.trim()
+        ),
+    };
+
+    let explanation = if current.is_some() {
+        "Updated the algorithm from your instruction (rule-based; set an API key for the LLM author)."
+            .to_string()
+    } else {
+        "Drafted a starter algorithm from your instruction (rule-based; set an API key for the LLM author)."
+            .to_string()
+    };
+
+    let params = match want_kind.as_str() {
+        "scorer" => {
+            let mut p = current
+                .map(|c| c.params.clone())
+                .filter(|v| !v.is_null())
+                .unwrap_or_else(|| serde_json::json!({ "base": "rubric_overlap" }));
+            if p.get("keywords").is_none() {
+                p["keywords"] = serde_json::json!(rule_keywords(&lower));
+            }
+            p
+        }
+        "context" => current
+            .map(|c| c.params.clone())
+            .filter(|v| !v.is_null())
+            .unwrap_or_else(|| serde_json::json!({ "keywords": rule_keywords(&lower) })),
+        _ => current
+            .map(|c| c.params.clone())
+            .unwrap_or(serde_json::Value::Null),
+    };
+
+    AuthoredAlgorithm {
+        algorithm: DeclarativeAlgorithm {
+            kind: want_kind,
+            name,
+            description,
+            addendum,
+            reflective,
+            max_iterations,
+            params,
+        },
+        explanation,
+        source: "rules".to_string(),
+    }
+}
+
+/// Significant keywords (length > 3, de-duplicated, capped) for rule-based
+/// scorer/context generation.
+fn rule_keywords(text: &str) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for w in text.split(|c: char| !c.is_alphanumeric()) {
+        let w = w.to_lowercase();
+        if w.len() > 3 && seen.insert(w.clone()) {
+            out.push(w);
+        }
+        if out.len() >= 6 {
+            break;
+        }
+    }
+    out
+}
+
+fn slugify(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if (ch == ' ' || ch == '-' || ch == '_') && !out.ends_with('_') && !out.is_empty() {
+            out.push('_');
+        }
+        if out.split('_').filter(|s| !s.is_empty()).count() >= 4 && out.ends_with('_') {
+            break;
+        }
+    }
+    let s = out.trim_matches('_').to_string();
+    if s.is_empty() {
+        "custom_strategy".to_string()
+    } else {
+        s
+    }
+}
+
+fn extract_json_object(text: &str) -> Result<Value, String> {
+    let start = text.find('{').ok_or_else(|| "no JSON object".to_string())?;
+    let slice = &text[start..];
+    let end = slice
+        .rfind('}')
+        .ok_or_else(|| "unclosed object".to_string())?;
+    serde_json::from_str(&slice[..=end]).map_err(|e| e.to_string())
 }
 
 fn extract_json_array(text: &str) -> Result<Vec<Value>, String> {

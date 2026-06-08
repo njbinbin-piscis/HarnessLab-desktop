@@ -3,6 +3,7 @@
 //! This module provides the bridge between declarative YAML configuration
 //! and the runtime `piscis_kernel::agent::harness::HarnessConfig`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use harness_rt::agent::harness::config::{CompactionSettings, ConfirmFlags};
@@ -17,6 +18,7 @@ use crate::config::AgentConfig;
 use crate::context_managers::{
     DynamicContextManager, KernelContextAdapter, ProjectContextManager, WorkspaceRootManager,
 };
+use crate::hooks::EvolutionPolicy;
 use crate::hooks::WorkbenchHooks;
 use crate::plugins::{ContextManager, NoOpContextManager};
 
@@ -167,7 +169,8 @@ pub fn build_harness_config(
     Ok(builder.build())
 }
 
-/// Build a [`WorkbenchHooks`] adapter from the YAML `hooks` section.
+/// Build a [`WorkbenchHooks`] adapter from the YAML `hooks` section and
+/// `policy.evolution` self-improvement settings.
 ///
 /// Returns `None` when no configured hook produces observable behavior, so the
 /// loop runs without hook overhead in the default case.
@@ -193,10 +196,28 @@ pub fn build_workbench_hooks(
                 };
                 hooks = hooks.with_journal(path);
             }
-            // PlanTracker and other types are accepted but not yet wired to a
-            // concrete behavior; they are intentional no-ops for now.
+            "PlanTracker" => {
+                let rel = hook
+                    .params
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".pisci/plan.md");
+                let path = match project_dir {
+                    Some(dir) => dir.join(rel),
+                    None => std::path::PathBuf::from(rel),
+                };
+                hooks = hooks.with_plan_tracker(path);
+            }
+            // Unknown hook types are accepted but produce no behavior.
             _ => {}
         }
+    }
+    let evo: EvolutionPolicy = (&agent_config.policy.evolution).into();
+    if evo.enabled {
+        let root = project_dir
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        hooks = hooks.with_evolution(evo, root);
     }
     hooks.is_active().then_some(hooks)
 }
@@ -222,6 +243,11 @@ pub fn resolve_context_manager(name: &str) -> Result<Box<dyn ContextManager>, Co
 pub fn resolve_kernel_context_manager(
     name: &str,
 ) -> Result<Arc<dyn harness_rt::context::ContextManager>, ConfigLoadError> {
+    // Architect-authored declarative context managers register directly as
+    // kernel-trait objects in the contrib registry — use them as-is.
+    if let Some(ctx) = harness_rt::agent::contrib::resolve_context_manager(name) {
+        return Ok(ctx);
+    }
     let inner = resolve_context_manager(name)?;
     Ok(Arc::new(KernelContextAdapter::new(name, inner)))
 }
@@ -539,5 +565,28 @@ hooks:
         let (reg2, policy2) = test_scaffolding();
         let h2 = build_harness_config(&bare, reg2, policy2, Some(dir.path())).unwrap();
         assert!(h2.hooks.is_none());
+    }
+
+    #[test]
+    fn test_evolution_hooks_attached_when_policy_enabled() {
+        let yaml = r#"
+agent:
+  name: "EvolutionAgent"
+  model: "claude-haiku-4.5"
+
+policy:
+  evolution:
+    enabled: true
+    threshold:
+      user_correction_rate: 0.15
+"#;
+        let config = AgentConfig::from_yaml(yaml).unwrap();
+        let (reg, policy) = test_scaffolding();
+        let dir = tempfile::TempDir::new().unwrap();
+        let harness = build_harness_config(&config, reg, policy, Some(dir.path())).unwrap();
+        assert!(
+            harness.hooks.is_some(),
+            "evolution policy should attach workbench hooks"
+        );
     }
 }

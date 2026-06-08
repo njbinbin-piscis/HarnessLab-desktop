@@ -5,6 +5,7 @@
 //! commands/events instead of an HTTP API.
 
 mod commands;
+mod runtime;
 
 use harnesslab_core::store::Store;
 use tauri::Manager;
@@ -61,6 +62,7 @@ pub fn run() {
             commands::generate,
             commands::download_factory_zip,
             commands::design_edit,
+            commands::design_project,
             commands::market_installed,
             commands::market_sample_source,
             commands::market_inspect,
@@ -88,8 +90,14 @@ pub fn run() {
             commands::list_eval_runs,
             commands::eval_leaderboard,
             commands::register_algorithm,
+            commands::author_algorithm,
             commands::list_algorithms,
             commands::delete_algorithm,
+            commands::run_algorithm_trial,
+            commands::runtime_runs,
+            commands::embedding_status,
+            commands::reload_library,
+            commands::run_autoloop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running HarnessLab Desktop");

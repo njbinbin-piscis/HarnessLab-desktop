@@ -57,7 +57,7 @@ pub fn resolve_for_agent(spec: &AgentSpec) -> Result<ResolvedLlm, String> {
                 model,
             })
         }
-        "env" | _ => {
+        _ => {
             let creds = LlmCreds::from_env()?;
             Ok(ResolvedLlm {
                 model: effective_model(spec),

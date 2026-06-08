@@ -113,7 +113,7 @@ pub struct AgentRunOutcome {
 
 // ── Project → AgentConfig mapping ────────────────────────────────────────────
 
-fn slot_name<'a>(slot: &'a Option<crate::project::ComponentRef>) -> Option<&'a str> {
+fn slot_name(slot: &Option<crate::project::ComponentRef>) -> Option<&str> {
     slot.as_ref().map(|c| c.name.as_str())
 }
 
@@ -446,11 +446,11 @@ pub async fn run_project_task(
     };
 
     let topo = &project.topology;
-    let outcome = if topo.mode == "single" || specs.len() == 1 || topo.coordinator.is_none() {
-        let spec = &specs[0];
-        run_agent_task(&ctx, spec, task, "").await?
-    } else {
-        let coord = topo.coordinator.as_ref().unwrap();
+    let coordinator = topo
+        .coordinator
+        .as_ref()
+        .filter(|_| topo.mode != "single" && specs.len() != 1);
+    let outcome = if let Some(coord) = coordinator {
         let _ = events
             .send(UiEvent::new(
                 "__coordinator__",
@@ -471,6 +471,9 @@ pub async fn run_project_task(
             ))
             .await;
         result
+    } else {
+        let spec = &specs[0];
+        run_agent_task(&ctx, spec, task, "").await?
     };
 
     Ok(RunOutcome {

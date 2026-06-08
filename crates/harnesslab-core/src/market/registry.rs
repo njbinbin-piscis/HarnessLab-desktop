@@ -7,18 +7,10 @@ use serde::{Deserialize, Serialize};
 
 pub const INDEX_SCHEMA_VERSION: &str = "1";
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegistriesConfig {
     #[serde(default)]
     pub registries: Vec<String>,
-}
-
-impl Default for RegistriesConfig {
-    fn default() -> Self {
-        Self {
-            registries: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

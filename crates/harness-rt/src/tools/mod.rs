@@ -127,8 +127,8 @@ pub fn all_builtin_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(ShellTool),
         Arc::new(CodeRunTool),
         Arc::new(ProcessControlTool),
-        Arc::new(WebSearchTool::default()),
-        Arc::new(UrlFetcherTool::default()),
+        Arc::new(WebSearchTool),
+        Arc::new(UrlFetcherTool),
         Arc::new(RegisterAlgorithmTool),
         Arc::new(FinishTool),
     ]
